@@ -39,8 +39,8 @@ putting a line in the listing description saying which OrcaSlicer build it needs
 
 **Name:** FlashForge Creator 5
 
-**Type:** Slicing-pipeline (the plugin also registers a tab and a printer agent —
-see *Capability types and the hub* below)
+**Types:** three capabilities — Pages, Slicing Pipeline, Printer Connection. See
+*Capability types and the hub* below: a plugin is not listed under one type.
 
 **Compatible OrcaSlicer:** 2.5.0 or newer
 
@@ -98,23 +98,63 @@ see *Capability types and the hub* below)
 
 ## Capability types and the hub
 
-The hub's **Plugin Type** field offers Script, Slicing-pipeline and Resource
-textures. This plugin registers three capabilities — `pages` (the tab),
-`slicing-pipeline` (the slice capture) and `printer-connection` (the agent) — so
-there is no single hub type that describes it. Slicing-pipeline is the closest of
-the three offered, since the plugin does install a G-code pipeline capability, but
-it undersells the tab.
+A plugin is **not listed under a single type**. From the wiki's Plugin Types page:
+there is "no separate `type` declaration in the metadata" — the capabilities the
+plugin registers determine which workflows can run it, and the Plugins dialog
+shows *one row per registered capability*, each with its own enable checkbox and
+its own type label. The types are **Script**, **Slicing Pipeline**, **Printer
+Connection**, **Pages**, and **Resource Texture** packs.
 
-Flag this to the Orca Cloud team when submitting rather than guessing: ask whether
-a multi-capability plugin can be listed and which type it should carry. The hub
-also has a **Compatible OrcaSlicer Version** field, which is the right place to
-record the 2.5.0 floor.
+So this plugin presents three rows: Pages (the FlashForge C5 tab), Slicing
+Pipeline (the slice capture), and Printer Connection (the printer agent). There is
+nothing to choose and nothing to match.
+
+The printer-agent type is not even ours to set: `PrinterAgentBase.get_type()`
+already returns `orca.PluginType.PrinterConnection` (`"printer-connection"`) and
+the docs say explicitly, *"You do not override it."*
+
+The hub still asks for a type on the listing card, and its dropdown only offers
+Script / Slicing-pipeline / Resource textures — no Pages or Printer Connection.
+That dropdown is likely just behind the beta, but it is worth a note to the Orca
+Cloud team when submitting rather than guessing. The **Compatible OrcaSlicer
+Version** field is the right place to record the 2.5.0 floor.
+
+## The "Adventurer plugin" is not a plugin
+
+Worth stating because it changes the pitch: the existing FlashForge Adventurer 5
+series support is **built into OrcaSlicer core**, not published as a hub plugin.
+PR #12991 ("Add Flashforge Adventurer 5 series local send workflow with IFS
+mapping", @marianomd) merged to main in May 2026, and the 2.4.0-beta release notes
+describe it: "Flashforge Adventurer 5 series, including local printer discovery,
+saving the printer serial number and access code, and a Flashforge-specific send
+dialog."
+
+There is therefore no Adventurer plugin listing type to match. The equivalent move
+for the Creator 5 would be contributing it upstream the same way — PR #12991
+included a commit titled "Generalize Flashforge local API handling", so the core
+code is already generalised across FlashForge machines. That is the long game;
+this plugin is the one that works today.
 
 ## Differentiation
 
-The only comparable published plugin targets the **Adventurer 5M / 5M Pro**. The
-Creator 5 / 5 Pro is a different machine with a different API surface — a material
-station with four slots and per-slot filament reporting, a different file and
-job-control contract, and the uninitialised-memory quirk in its idle status
-payload. This plugin is written against the Creator 5's protocol and is not a
-reskin of the Adventurer one.
+The comparable FlashForge plugins, as of 2026-11-19:
+
+| Repo | Covers | Approach | Licence | Notes |
+|---|---|---|---|---|
+| `UshMask/flashforge-device-tab` | several printers | Device tab panel | MIT | **Read-only.** Single file, has docs and tests |
+| `monkyja/flashforge-connect` | Creator 5 Pro | Pages, **FlashForge cloud account** login (Linux keyring) | AGPL-3.0 | README states the full send "has not been validated with the real printer" |
+| `djvalic/kiln-orca` | AD5X only | IFS tool→slot mapping over Moonraker | GPL-3.0 | Requires Kiln OS custom firmware |
+
+Where this plugin stands apart:
+
+- **LAN only, no FlashForge account.** `flashforge-connect` logs in to FlashForge's
+  cloud; this one talks straight to the printer on port 8898 and needs no account.
+- **Read and write.** The Device-tab panel is read-only; this does upload, print,
+  pause/resume/cancel, reprint, light and clear-platform.
+- **The send path is exercised.** The mock Creator 5 enforces the real request
+  shape and the protocol matches a client verified against firmware 2.0.0 —
+  `flashforge-connect` says plainly that its send is unvalidated.
+- **The `.gcode.3mf` trap is handled.** OrcaSlicer exports a bundle this firmware
+  lists and then refuses to print; the plugin extracts the inner G-code.
+- **Permissive licence.** MIT against AGPL-3.0 and GPL-3.0, so it is usable in
+  more contexts.
