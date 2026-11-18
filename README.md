@@ -32,11 +32,16 @@ with no third-party dependencies — nothing is downloaded at plugin load time.
 ## Install
 
 1. Open **Plugins** in OrcaSlicer, then **Browse plugins ▾ → Install local
-   plugin**, and pick `flashforge-c5.py`.
+   plugin**, and pick `flashforge-c5_any.py`.
 
    Or copy the file into its own folder under the OrcaSlicer data directory, e.g.
-   `%APPDATA%\OrcaSlicer\orca_plugins\flashforge-c5\flashforge-c5.py`. A plugin
-   folder must contain exactly one entry file (one `.py` or one `.whl`).
+   `%APPDATA%\OrcaSlicer\orca_plugins\flashforge-c5\flashforge-c5_any.py`. A
+   plugin folder must contain exactly one entry file (one `.py` or one `.whl`).
+
+   The `_any` suffix is not decoration — Orca Cloud's hub requires a target-OS
+   suffix on uploaded plugin files, and `any` is its universal marker for a pure
+   Python plugin. The same filename works for a local install, so there is only
+   one file to keep track of.
 
 2. OrcaSlicer prompts for the filesystem and network access the plugin declares.
    Accept both — without the network permission the plugin cannot reach the
@@ -97,6 +102,26 @@ tab does, and **Print** uploads and starts the job in one step.
 
 Environment overrides, handy for testing: `FFC5_HOST`, `FFC5_PORT`,
 `FFC5_SERIAL`, `FFC5_CHECK_CODE`.
+
+## Publishing to the Orca Cloud hub
+
+`HUB_LISTING.md` holds the listing text and the submission checklist. Two things
+worth knowing before you start:
+
+- **The hub is Nightly-only.** Orca Cloud's help page says plugins are a Beta
+  feature that "currently work only with current OrcaSlicer Nightly builds" —
+  stable releases will not show or load Orca Cloud plugins. That gate is separate
+  from the plugin system itself, which is in 2.5.0 stable and is what loads this
+  file locally. So the listing can go up now, but subscribers on 2.5.0 stable may
+  not see it until they run a Nightly.
+- **The filename suffix is a hard requirement.** Orca Cloud expects a target-OS
+  suffix on uploaded plugin files; `any` is its universal marker. Hence
+  `flashforge-c5_any.py`.
+
+Publishing is then: connect the repo in **Shared Plugins → Edit plugin → GitHub
+publishing**, fill the portal metadata, and publish a GitHub Release with a
+`vX.Y.Z` tag. `.github/workflows/publish-orcacloud.yml` does the upload over OIDC,
+so there is no token to store.
 
 ## Tests
 

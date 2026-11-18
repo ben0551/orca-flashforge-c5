@@ -39,7 +39,7 @@ def main():
         print("node is not installed — skipping the page checks")
         return 0
 
-    source = os.path.join(ROOT, "flashforge-c5.py")
+    source = os.path.join(ROOT, "flashforge-c5_any.py")
     page, js = extract_page(source)
 
     work = tempfile.mkdtemp(prefix="ffc5-page-")

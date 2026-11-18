@@ -59,8 +59,8 @@ def build_3mf(path):
 
 def load_plugin(workdir):
     """Copy the plugin into its own directory and import it under a stub `orca`."""
-    source = os.path.join(ROOT, "flashforge-c5.py")
-    target = os.path.join(workdir, "flashforge-c5.py")
+    source = os.path.join(ROOT, "flashforge-c5_any.py")
+    target = os.path.join(workdir, "flashforge-c5_any.py")
     shutil.copy2(source, target)
 
     sys.modules["orca"] = fake_orca.make_module()
@@ -127,7 +127,7 @@ def main():
             # Re-run the package's registration against a fresh stub so we can
             # see exactly what the plugin declares.
             spec = importlib.util.spec_from_file_location(
-                "ffc5_reg", os.path.join(workdir, "flashforge-c5.py"))
+                "ffc5_reg", os.path.join(workdir, "flashforge-c5_any.py"))
             reg = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(reg)
             package.plugin_class().register_capabilities()
