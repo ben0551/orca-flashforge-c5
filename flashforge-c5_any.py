@@ -693,7 +693,8 @@ class Runtime:
         host, port = cfg.get("host") or "", cfg.get("port") or DEFAULT_API_PORT
         if not host:
             with self.lock:
-                self.status, self.error = None, "No printer address set — open Settings"
+                self.status, self.error = None, (
+                    "No printer address set — fill in Printer connection on this tab")
             return None, self.error
         if not _reachable(host, port):
             with self.lock:
@@ -780,6 +781,8 @@ PAGE = r"""
   #banner.err{border-color:var(--bad);background:#3a2323;color:#ffcdc9}
   #banner.ok{border-color:var(--accent);background:#243322;color:#d5f2cc}
   #banner.info{border-color:var(--accent2);background:#20303f;color:#cfe6ff}
+  #banner button{margin-left:9px;padding:2px 9px;font-size:11px}
+  .card.wanted{border-color:var(--accent2)}
   button{background:var(--panel2);color:var(--fg);border:1px solid var(--line);
          border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer}
   button:hover{border-color:#5a5f66}
@@ -900,7 +903,7 @@ PAGE = r"""
     <div class="files" id="files"><span class="dim small">loading…</span></div>
   </div>
 
-  <div class="card">
+  <div class="card" id="setup">
     <h3>Printer connection</h3>
     <div class="grid2">
       <label for="host">Address</label>
@@ -934,17 +937,52 @@ PAGE = r"""
     return el;
   }
   var bannerKind = "info", bannerTimer = null;
-  function showBanner(msg, kind){
+  function hideBanner(){
+    var b = $("banner");
+    if (!b) { return; }
+    if (bannerTimer) { clearTimeout(bannerTimer); bannerTimer = null; }
+    b.style.display = "none";
+    bannerKind = "info";
+  }
+  // `actionLabel` + `action` give the message a button to point at and make it
+  // stay put. A banner that names something the user cannot find, then expires
+  // after nine seconds, is worse than saying nothing.
+  function showBanner(msg, kind, actionLabel, action){
     var b = $("banner");
     if (!b) { return; }
     b.textContent = msg;
+    if (actionLabel && action) {
+      var btn = document.createElement("button");
+      btn.textContent = actionLabel;
+      btn.addEventListener("click", action);
+      b.appendChild(btn);
+    }
     b.className = kind || "info";
     b.style.display = "block";
-    bannerKind = "msg";
+    bannerKind = actionLabel ? "sticky" : "msg";
     if (bannerTimer) { clearTimeout(bannerTimer); }
-    bannerTimer = setTimeout(function(){
-      if (bannerKind === "msg") { b.style.display = "none"; bannerKind = "info"; }
-    }, 9000);
+    if (bannerKind === "msg") {
+      bannerTimer = setTimeout(function(){
+        if (bannerKind === "msg") { hideBanner(); }
+      }, 9000);
+    }
+  }
+  function focusSetup(){
+    var s = $("setup");
+    if (s && s.scrollIntoView) { s.scrollIntoView({ block: "nearest" }); }
+    var h = $("host");
+    if (h && h.focus) { h.focus(); }
+  }
+  function showSetupBanner(on){
+    if (on) {
+      // Never stomp a live status message such as "Sending…".
+      if (bannerKind !== "msg") {
+        showBanner("No printer address set — fill in the Printer connection panel.",
+                   "info", "Set up printer", focusSetup);
+      }
+    } else if (bannerKind === "sticky") {
+      hideBanner();
+    }
   }
   function fmtDur(sec){
     sec = Math.max(0, Math.round(Number(sec) || 0));
@@ -1103,6 +1141,22 @@ PAGE = r"""
     $("code").value   = cfg.check_code || "";
     $("poll").value   = cfg.poll_seconds || 3;
     $("clevel").checked = cfg.leveling !== false;
+    // Until an address is set this panel is the only thing that matters, so it
+    // must not be the sixth card below the fold. Once configured it drops back
+    // to the end, out of the way.
+    var setup = $("setup"), banner = $("banner");
+    if (!setup || !banner || !banner.parentNode) { return; }
+    if (!cfg.host) {
+      if (banner.nextElementSibling !== setup) {
+        banner.parentNode.insertBefore(setup, banner.nextElementSibling);
+      }
+      setup.className = "card wanted";
+    } else {
+      if (setup.parentNode && setup.parentNode.lastElementChild !== setup) {
+        setup.parentNode.appendChild(setup);
+      }
+      setup.className = "card";
+    }
   }
 
   function setJobRunning(on){
@@ -1251,6 +1305,7 @@ PAGE = r"""
           ? ("last slice: " + m.last_slice + " — ready to send")
           : "no slice captured yet";
         $("stt").textContent = (m.status && m.status.status) || "unknown";
+        showSetupBanner(!!m.needs_setup);
         break;
       case "cfg":   paintCfg(m.cfg); break;
       case "files": paintFiles(m.files, m.detail); break;
@@ -1356,13 +1411,17 @@ class FlashForgePage(orca.pages.PagesPluginCapabilityBase):
 
     def _status(self, _msg):
         status, error = RUNTIME.refresh()
+        needs_setup = not (load_settings().get("host") or "")
         self.post_message({
             "type": "state",
             "status": status or {"name": "FlashForge", "status": "offline",
                                  "progress": 0, "nozzles": [], "spools": []},
             "last_slice": LAST_SLICE.get("name") or None,
+            "needs_setup": needs_setup,
         })
-        if error:
+        if error and not needs_setup:
+            # With nothing configured the page shows a persistent setup banner
+            # carrying a button; a plain log line would only overwrite it.
             self.post_message({"type": "log", "message": error})
 
     def _files(self, _msg):

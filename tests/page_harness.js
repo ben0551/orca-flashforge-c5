@@ -36,7 +36,7 @@ function assert(cond, msg) { if (!cond) { throw new Error(msg); } }
 // aborts the whole inline script, which is exactly the failure this catches.
 function makeEl(id) {
   return {
-    id: id, _listeners: {}, style: {}, dataset: {},
+    id: id, _listeners: {}, style: {}, dataset: {}, children: [], parentNode: null,
     className: "", textContent: "", innerHTML: "", value: "", checked: true,
     disabled: false, files: null,
     addEventListener(t, fn) { (this._listeners[t] = this._listeners[t] || []).push(fn); },
@@ -45,6 +45,21 @@ function makeEl(id) {
     querySelector() { return null; },
     setAttribute(k, v) { this.dataset[k] = v; },
     getAttribute(k) { return this.dataset[k]; },
+    // Just enough of the element tree for the page's one reorder: the
+    // connection panel moves to the top while the printer has no address.
+    appendChild(c) { this.children.push(c); c.parentNode = this; return c; },
+    insertBefore(c, ref) {
+      const i = ref ? this.children.indexOf(ref) : -1;
+      if (i >= 0) { this.children.splice(i, 0, c); } else { this.children.push(c); }
+      c.parentNode = this; return c;
+    },
+    get lastElementChild() { return this.children[this.children.length - 1] || null; },
+    get nextElementSibling() {
+      if (!this.parentNode) { return null; }
+      const i = this.parentNode.children.indexOf(this);
+      return this.parentNode.children[i + 1] || null;
+    },
+    focus() {}, scrollIntoView() {},
   };
 }
 
@@ -53,12 +68,22 @@ const IDS = ["banner", "pname", "pip", "pfw", "dot", "stt", "jfile", "barfill",
   "spools", "mapwrap", "tools", "bsend", "bsendprint", "blast", "lastinfo",
   "bfile", "finfo", "clevel", "upwrap", "upbar", "uplabel", "files", "host",
   "port", "serial", "code", "poll", "bsave", "cfginfo", "bpause", "bresume",
-  "bcancel", "blight", "bclear"];
+  "bcancel", "blight", "bclear", "setup"];
 const byId = {};
 IDS.forEach(id => { byId[id] = makeEl(id); });
 // The markup ships the send buttons disabled; a stub has no markup to parse.
 byId["bsend"].disabled = true;
 byId["bsendprint"].disabled = true;
+
+// The page reorders the setup card, so the stub needs a parent for it. This
+// mirrors the markup: header, banner, then the cards, with the connection
+// panel last — which is the placement that caused the bug.
+const wrap = makeEl("wrap");
+wrap.appendChild(byId["pname"]);          // stands in for #hdr
+wrap.appendChild(byId["banner"]);
+wrap.appendChild(makeEl("cardJob"));
+wrap.appendChild(makeEl("cardSend"));
+wrap.appendChild(byId["setup"]);
 
 // The tool picker is generated as markup, so read the selects back out of the
 // markup the page produced and honour which option carries `selected`.
@@ -91,6 +116,7 @@ byId["files"].querySelectorAll = function (sel) {
 
 const sent = [];
 const listeners = [];
+const timers = [];
 const doc = { getElementById: id => byId[id] || null, createElement: () => makeEl("x") };
 
 let readerResult = new ArrayBuffer(8);
@@ -107,7 +133,11 @@ const ctx = {
   console: { log: () => {}, error: (...a) => errors.push(a.join(" ")) },
   orca: { postMessage: o => sent.push(o), onMessage: fn => listeners.push(fn) },
   setInterval: () => 1, clearInterval: () => {},
-  setTimeout: () => 1, clearTimeout: () => {},
+  // Recorded rather than run. The auto-hide timer is only testable if it can be
+  // fired on demand, and a sticky banner is only provably sticky if no timer
+  // was armed at all.
+  setTimeout: (fn) => { timers.push(fn); return timers.length; },
+  clearTimeout: () => {},
   btoa: s => Buffer.from(s, "binary").toString("base64"),
 };
 ctx.globalThis = ctx;
@@ -339,6 +369,71 @@ must("Save & test posts the form values", () => {
   assert(m && m.host === "192.168.1.50" && m.serial === "SN999" &&
          m.check_code === "ABCD" && m.port === 8898 && m.poll_seconds === 4,
          JSON.stringify(m));
+});
+
+console.log("\nFinding the printer settings");
+// Let any transient message left by the tests above expire, as nine seconds of
+// real use would — otherwise the guard below (correctly) refuses to replace it.
+timers.splice(0).forEach(fn => fn());
+
+must("with no address, the connection panel moves to the top", () => {
+  // The bug this covers: the panel sat sixth on the page, so the banner told
+  // the user to open a Settings that does not exist while nothing that would
+  // fix it was on screen.
+  deliver({ type: "cfg", cfg: { host: "", port: 8898, serial: "", check_code: "" } });
+  assert(wrap.children.indexOf(byId["banner"]) + 1 ===
+         wrap.children.indexOf(byId["setup"]),
+         "setup is at index " + wrap.children.indexOf(byId["setup"]) +
+         " of " + wrap.children.length);
+  assert(String(byId["setup"].className).includes("wanted"),
+         "setup was not highlighted: " + byId["setup"].className);
+});
+must("once an address is set the panel goes back to the end", () => {
+  deliver({ type: "cfg", cfg: { host: "10.0.0.9", port: 8898, serial: "SN1",
+                                check_code: "CC" } });
+  assert(wrap.children[wrap.children.length - 1] === byId["setup"],
+         "setup is at index " + wrap.children.indexOf(byId["setup"]));
+  assert(!String(byId["setup"].className).includes("wanted"),
+         "setup is still highlighted: " + byId["setup"].className);
+});
+must("an unconfigured tab shows a banner the user can act on", () => {
+  deliver({ type: "state", status: STATES.idle, last_slice: null, needs_setup: true });
+  assert(byId["banner"].style.display === "block", "the banner is not shown");
+  assert(byId["banner"].textContent.includes("Printer connection"),
+         "the banner does not say where to look: " + byId["banner"].textContent);
+  assert(!byId["banner"].textContent.includes("Settings"),
+         "the banner still points at a Settings that does not exist");
+  assert(byId["banner"].children.length === 1, "no action button on the banner");
+});
+must("that banner's button focuses the address field", () => {
+  let focused = false;
+  byId["host"].focus = () => { focused = true; };
+  byId["banner"].children[0].dispatch("click");
+  assert(focused, "the button did not focus the address field");
+});
+must("a setup banner is sticky, not on the nine-second auto-hide", () => {
+  const before = timers.length;
+  deliver({ type: "state", status: STATES.idle, last_slice: null, needs_setup: true });
+  assert(timers.length === before, "a timer was armed for the sticky banner");
+});
+must("a setup banner does not stomp a live status message", () => {
+  deliver({ type: "log", message: "Sending…" });
+  deliver({ type: "state", status: STATES.idle, last_slice: null, needs_setup: true });
+  assert(byId["banner"].textContent === "Sending…",
+         "the setup banner overwrote a live message: " + byId["banner"].textContent);
+});
+must("an ordinary message still auto-hides", () => {
+  deliver({ type: "log", message: "hello" });
+  assert(timers.length > 0, "no timer armed for a transient message");
+  timers[timers.length - 1]();
+  assert(byId["banner"].style.display === "none", "the transient banner did not hide");
+});
+must("a configured tab clears the setup banner", () => {
+  deliver({ type: "state", status: STATES.idle, last_slice: null, needs_setup: true });
+  assert(byId["banner"].style.display === "block", "setup banner did not appear");
+  deliver({ type: "state", status: STATES.idle, last_slice: null, needs_setup: false });
+  assert(byId["banner"].style.display === "none",
+         "the setup banner outlived the setup: " + byId["banner"].style.display);
 });
 
 check("no null-element lookups fired during the run", errors.length === 0,

@@ -413,6 +413,31 @@ def main():
             check("a chunk with nothing staged is refused, not crashed",
                   chunk_tab.latest("error") is not None)
 
+            # An unconfigured tab has to say so in a way the page can act on.
+            # The state carries the flag, and the plain log line is suppressed
+            # so it cannot overwrite the banner that offers the button.
+            unset_tab = Tab(page)
+            plugin._SETTINGS_CACHE = dict(saved, host="", serial="", check_code="")
+            unset_tab.send({"type": "status"})
+            state_msg = unset_tab.latest("state")
+            check("an unconfigured tab flags itself for setup",
+                  state_msg is not None and state_msg.get("needs_setup") is True,
+                  str(state_msg)[:180])
+            check("the setup flag suppresses the plain error log",
+                  unset_tab.latest("log") is None,
+                  str(unset_tab.latest("log"))[:180])
+            _, setup_error = plugin.Runtime().refresh()
+            check("the error text points at the panel, not a 'Settings' that does not exist",
+                  "Printer connection" in (setup_error or "")
+                  and "Settings" not in (setup_error or ""),
+                  str(setup_error))
+
+            configured_tab = Tab(page)
+            plugin._SETTINGS_CACHE = dict(saved, host="127.0.0.1")
+            configured_tab.send({"type": "status"})
+            check("a configured tab does not flag setup",
+                  configured_tab.latest("state").get("needs_setup") is False)
+
             # ---------------------------------------------------------------
             print("\nHelpers")
             check("nearest_slot skips empty slots",
