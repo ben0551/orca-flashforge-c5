@@ -1,4 +1,4 @@
-"""Tests for the MakerWorld tab: the project conversion and the file hand-off.
+"""Tests for the MakerWorld C5 plugin: the project conversion and the hand-off.
 
 The conversion is the part with real behaviour to get wrong, so the assertions
 are made against the *converted project settings* - what OrcaSlicer would load -
@@ -118,8 +118,8 @@ def read_config(path):
 
 
 def load_plugin(workdir):
-    source = os.path.join(ROOT, "flashforge-c5_any.py")
-    target = os.path.join(workdir, "flashforge-c5_any.py")
+    source = os.path.join(ROOT, "makerworld-c5_any.py")
+    target = os.path.join(workdir, "makerworld-c5_any.py")
     shutil.copy2(source, target)
     sys.modules["orca"] = fake_orca.make_module()
     spec = importlib.util.spec_from_file_location("ffc5_mw_under_test", target)
@@ -149,6 +149,28 @@ def main():
         plugin = load_plugin(workdir)
         orca_stub = sys.modules["orca"]
         import urllib.request
+
+        print("Registration")
+        package = fake_orca.make_module()
+        sys.modules["orca"] = package
+        spec = importlib.util.spec_from_file_location(
+            "mwc5_reg", os.path.join(ROOT, "makerworld-c5_any.py"))
+        reg = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(reg)
+        package.plugin_class().register_capabilities()
+        names = {c.__name__ for c in package.registered_capabilities}
+        check("the MakerWorld plugin registers only its own tab",
+              names == {"MakerWorldPage"}, str(sorted(names)))
+        check("it declares the hosts it downloads from",
+              {"https://makerworld.com", "https://api.bambulab.com",
+               "https://makerworld.bblmw.com"}
+              <= set(package.requested_permissions.get("network_http", [])),
+              str(package.requested_permissions.get("network_http")))
+        check("it asks for no printer host (that is the other plugin's job)",
+              not any(u.startswith("http://") for u in
+                      package.requested_permissions.get("network_http", [])),
+              str(package.requested_permissions.get("network_http")))
+        sys.modules["orca"] = orca_stub
 
         print("Reading a MakerWorld link")
         check("a plain model URL resolves to its design id",

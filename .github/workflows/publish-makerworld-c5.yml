@@ -1,10 +1,15 @@
-name: Publish to OrcaCloud
+name: Publish MakerWorld C5 to OrcaCloud
 
-# Publishes this plugin to the Orca Cloud plugin hub on every GitHub Release.
-# The tag (e.g. v1.0.1) becomes the plugin version and must be a semantic
-# version greater than the version currently listed.
+# Publishes the **MakerWorld C5** plugin, and only that plugin.
 #
-# One-time setup, in the Orca Cloud web portal:
+# Each plugin in this repo has its own workflow, its own tag prefix and its own
+# version, so the two are released and updated independently: a `flashforge-v*` tag
+# never republishes this one, and vice versa.
+#
+# The tag (e.g. makerworld-vX.Y.Z) becomes the plugin version and
+# must be a semantic version greater than the version currently listed.
+#
+# One-time setup, in the Orca Cloud web portal, **once per plugin**:
 #   Shared Plugins -> your plugin -> Edit plugin -> GitHub publishing
 #   -> enter "ben0551/orca-flashforge-c5" -> Connect
 #
@@ -23,10 +28,14 @@ env:
   # Space-separated globs matching the plugin files to upload (.py / .whl).
   # The `_any` suffix is Orca Cloud's universal (OS-independent) marker and is
   # required on uploaded filenames.
-  PLUGIN_FILES: "flashforge-c5_any.py"
+  PLUGIN_FILES: "makerworld-c5_any.py"
+  # Stripped off the release tag to give the version.
+  TAG_PREFIX: "makerworld-v"
 
 jobs:
   publish:
+    # The tag decides which plugin is being released: `makerworld-vX.Y.Z`.
+    if: startsWith(github.event.release.tag_name, 'makerworld-v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,7 +45,12 @@ jobs:
           set -euo pipefail
           oidc_token="$(curl -sS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=orcacloud" | jq -r .value)"
-          version="${GITHUB_REF_NAME#v}"
+                    tag="${GITHUB_REF_NAME}"
+          version="${tag#"$TAG_PREFIX"}"
+          if [ "$version" = "$tag" ]; then
+            echo "Release tag '$tag' does not start with '$TAG_PREFIX'" >&2
+            exit 1
+          fi
           changelog="$(jq -r '.release.body // ""' "$GITHUB_EVENT_PATH" | head -c 4000)"
           metadata="$(jq -cn --arg version "$version" --arg changelog "$changelog" \
             '{version: $version} + (if $changelog == "" then {} else {changelog: $changelog} end)')"

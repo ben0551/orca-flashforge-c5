@@ -1,24 +1,35 @@
 # Orca Cloud hub listing
 
-Copy-paste material for the plugin's page on the Orca Cloud hub, kept here so the
+Copy-paste material for the plugins' pages on the Orca Cloud hub, kept here so the
 listing text does not drift from the code.
+
+**There are two plugins in this repo, and therefore two listings.** They are
+installed, versioned and published independently, and the hub sees them as
+unrelated plugins. Everything below is labelled with the plugin it belongs to.
 
 ## Checklist before publishing
 
 | # | Requirement | Status |
 |---|---|---|
-| 1 | Plugin file carries a target-OS suffix — `any` for a pure Python plugin | Done: `flashforge-c5_any.py` |
-| 2 | A `LICENSE` file at the repo root | Done: MIT |
-| 3 | `.py` only, no binaries/archives/symlinks in the upload | Done: one `.py` |
-| 4 | Release tagged with a semantic version greater than the current one | Not yet — `v1.0.0` on first publish |
-| 5 | Repo connected in the portal: **Shared Plugins → Edit plugin → GitHub publishing** → `ben0551/orca-flashforge-c5` → Connect | Not yet — manual step, needs your login |
-| 6 | Portal metadata filled: compatible OrcaSlicer version, supported OS, tags | Not yet — set in the portal |
+| 1 | Plugin file carries a target-OS suffix — `any` for a pure Python plugin | Done: `flashforge-c5_any.py`, `makerworld-c5_any.py` |
+| 2 | A `LICENSE` file at the repo root | Done: MIT (covers both) |
+| 3 | `.py` only, no binaries/archives/symlinks in the upload | Done: one `.py` each |
+| 4 | Release tag is a semantic version greater than the one listed | `flashforge-v1.2.0` / `makerworld-v1.0.0` on first publish |
+| 5 | Repo connected in the portal, **once per plugin**: **Shared Plugins → Edit plugin → GitHub publishing** → `ben0551/orca-flashforge-c5` → Connect | Not yet — manual step, needs your login |
+| 6 | Portal metadata filled: compatible OrcaSlicer version, supported OS, tags | Not yet — set in the portal, once per listing |
 | 7 | Listing icon uploaded (set in the portal, not in plugin metadata) | Ready: `icon.png` (512), `icon-256.png`, `icon-128.png` |
 
-Once 5 and 6 are done, publishing a new version is just: push, create a GitHub
-Release with a `vX.Y.Z` tag, publish the release. The workflow in
-`.github/workflows/publish-orcacloud.yml` uploads the file, the tag becomes the
-version, and the release notes become the changelog.
+Once 5 and 6 are done, publishing a new version of **one** plugin is just: push,
+create a GitHub Release whose tag carries that plugin's prefix, and publish it. The
+tag decides which workflow runs:
+
+| Plugin | Workflow | Release tag | Version published |
+|---|---|---|---|
+| `flashforge-c5` | `.github/workflows/publish-flashforge-c5.yml` | `flashforge-v1.2.0` | `1.2.0` |
+| `makerworld-c5` | `.github/workflows/publish-makerworld-c5.yml` | `makerworld-v1.0.0` | `1.0.0` |
+
+Each workflow refuses a tag that is not its own, so publishing one plugin never
+touches the other's listing. That plugin's release notes become its changelog.
 
 ## ⚠️ Read this first: the hub needs a Nightly build
 
@@ -44,7 +55,9 @@ editing numbers and re-running rather than redrawing art. The wiki documents no
 icon field in plugin metadata, so expect to upload it on the portal's listing
 page.
 
-**Name:** FlashForge Creator 5
+### `flashforge-c5` → listing 1
+
+**Name:** FlashForge C5
 
 **Types:** two capabilities — Pages and Printer Connection. See
 *Capability types and the hub* below: a plugin is not listed under one type.
@@ -54,7 +67,7 @@ page.
 **Supported OS:** any (pure Python, standard library only)
 
 **Tags:** `flashforge`, `creator-5`, `creator-5-pro`, `printer-agent`, `lan`,
-`local`, `no-cloud`, `makerworld`, `3mf`, `converter`
+`local`, `no-cloud`
 
 **Short description**
 
@@ -64,11 +77,9 @@ page.
 > port 8898 instead: a FlashForge C5 tab with live status, temperatures, the
 > 4-slot material station, job control, and the files already on the printer with
 > a plate preview and one-click reprint — plus a printer agent so OrcaSlicer's own
-> Send and Print buttons work too. A second tab takes a MakerWorld link and
-> rebuilds the designer's project for the printer you have selected, keeping the
-> settings they tuned, and opens it ready to slice. If the printer is already set
-> up in OrcaSlicer under its **Flashforge** host type, the plugin reads the
-> address, serial and access code from there rather than asking again.
+> Send and Print buttons work too. If the printer is already set up in OrcaSlicer
+> under its **Flashforge** host type, the plugin reads the address, serial and
+> access code from there rather than asking again.
 
 **Long description**
 
@@ -92,14 +103,6 @@ page.
 > - **No retyping** — if you already set this printer up in OrcaSlicer's own
 >   **Flashforge** host type, the plugin reads the address, serial number and
 >   access code straight out of that printer preset and fills its own panel in.
-> - **MakerWorld tab** — paste a MakerWorld link (or point at a `.3mf` you already
->   have) and the designer's project is rebuilt for the printer you have selected:
->   their layer height, walls, infill, shells, seam, supports, temperatures and
->   colours are kept, and their machine is replaced with yours. The converted
->   project then opens in OrcaSlicer ready to slice. A MakerWorld file is a Bambu
->   Studio project, so opening one as it comes slices for the designer's printer
->   and buries everything they tuned.
->
 > **Two things it handles that the raw API does not**
 >
 > - OrcaSlicer exports `.gcode.3mf` bundles, which this firmware accepts, lists,
@@ -111,15 +114,65 @@ page.
 >
 > **Privacy.** Your serial number and LAN check code live in `settings.json`
 > beside the plugin at mode 0600, or in your OrcaSlicer printer preset if you had
-> already set one up — either way they are sent to nothing but your printer. The
-> MakerWorld tab talks to MakerWorld, and only when you use it; a BambuCloud token
-> (needed to download, and only for that) is kept in the same file and sent to
-> MakerWorld alone. The plugin has no dependencies.
+> already set one up — either way they are sent to nothing but your printer. This
+> plugin talks to your printer and to nothing else. It has no dependencies.
 >
 > **Requirements.** OrcaSlicer 2.5.0 or newer. The printer on the same LAN, with
 > its serial number and LAN check code to hand (printer touchscreen → Device →
 > About, and → Network) — unless you already set the printer up in OrcaSlicer,
 > in which case the plugin reads them from there.
+
+### `makerworld-c5` → listing 2
+
+**Name:** MakerWorld C5
+
+**Types:** one capability — Pages. See *Capability types and the hub* below.
+
+**Compatible OrcaSlicer:** 2.5.0 or newer
+
+**Supported OS:** any (pure Python, standard library only)
+
+**Tags:** `makerworld`, `3mf`, `converter`, `bambu-studio`, `project`,
+`rebuild-for-my-printer`
+
+**Short description**
+
+> Paste a MakerWorld link and get the designer's project rebuilt for the printer
+> you have selected, then opened in OrcaSlicer ready to slice. A MakerWorld file is
+> a Bambu Studio project, so opening one as it comes slices for the *designer's*
+> printer — their bed, their machine limits, their start and end G-code — and
+> buries everything they tuned. This plugin replaces every setting the machine owns
+> with yours and keeps every setting the designer actually chose.
+
+**Long description**
+
+> **The problem.** A MakerWorld `.3mf` is a Bambu Studio project. Opening one as it
+> comes is not an error — OrcaSlicer ships the Bambu profiles, so the file loads
+> and slices cleanly, as a Bambu Lab P1P. Wrong bed, wrong machine limits, wrong
+> start and end G-code, and everything the designer tuned is buried under a printer
+> you do not own.
+>
+> **What you get**
+>
+> - **The conversion.** Every setting the *machine* owns is taken from the printer
+>   selected in OrcaSlicer; every other setting is left exactly as the designer set
+>   it. Layer height, walls, infill, shells, seam, supports, temperatures and
+>   colours stay theirs — they know their model.
+> - **The plate you want.** Resolving a link lists its plates, so you pick the one
+>   to convert rather than getting the first.
+> - **It opens itself.** The converted project is handed straight to the running
+>   OrcaSlicer, ready to slice. If that is refused, the tab says why and prints the
+>   path, so you can finish with **File → Open Project…**.
+> - **A local file works too.** Already have the `.3mf`? Point the tab at it and
+>   skip the download entirely.
+>
+> **Privacy.** A BambuCloud token (needed to download a link, and only for that)
+> lives in `settings.json` beside the plugin at mode 0600, and is sent to
+> MakerWorld alone. This plugin never talks to your printer. It has no
+> dependencies.
+>
+> **Requirements.** OrcaSlicer 2.5.0 or newer, and a printer selected in it — that
+> is what the project gets rebuilt for.
 
 ## Capability types and the hub
 
@@ -130,11 +183,11 @@ shows *one row per registered capability*, each with its own enable checkbox and
 its own type label. The types are **Script**, **Slicing Pipeline**, **Printer
 Connection**, **Pages**, and **Resource Texture** packs.
 
-So this plugin presents three rows: Pages (the FlashForge C5 tab), Pages (the
-MakerWorld tab) and Printer Connection (the printer agent). Neither page type
-appears in the listing dropdown, so there is nothing to match and nothing to
-contort — the dropdown describes a narrower set than the capability system
-supports.
+So `flashforge-c5` presents two rows — Pages (the FlashForge C5 tab) and Printer
+Connection (the printer agent) — and `makerworld-c5` presents one, Pages (the
+MakerWorld tab). The Pages type does not appear in the listing dropdown, so there
+is nothing to match and nothing to contort; the dropdown describes a narrower set
+than the capability system supports.
 
 The printer-agent type is not even ours to set: `PrinterAgentBase.get_type()`
 already returns `orca.PluginType.PrinterConnection` (`"printer-connection"`) and

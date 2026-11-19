@@ -1,4 +1,4 @@
-"""End-to-end tests for the FlashForge C5 OrcaSlicer plugin.
+"""End-to-end tests for the FlashForge C5 device plugin.
 
 Runs the real plugin file against a mock Creator 5 (tests/mock_printer.py) and a
 stub `orca` module (tests/fake_orca.py), then drives the tab's message protocol
@@ -132,17 +132,18 @@ def main():
             spec.loader.exec_module(reg)
             package.plugin_class().register_capabilities()
             names = {c.__name__ for c in package.registered_capabilities}
-            check("registers the two tabs and the printer agent",
-                  names == {"FlashForgePage", "MakerWorldPage", "FlashForgeAgent"},
-                  str(sorted(names)))
+            check("registers the device tab and the printer agent, and nothing else",
+                  names == {"FlashForgePage", "FlashForgeAgent"}, str(sorted(names)))
+            check("the MakerWorld converter is not part of this plugin",
+                  "MakerWorldPage" not in names)
             check("every capability name is unique and free of ';'",
                   len({c().get_name() for c in package.registered_capabilities}) == len(names)
                   and not any(";" in c().get_name()
                               for c in package.registered_capabilities),
                   str(sorted(c().get_name() for c in package.registered_capabilities)))
-            check("declares the MakerWorld hosts it downloads from",
-                  {"https://makerworld.com", "https://api.bambulab.com"}
-                  <= set(package.requested_permissions.get("network_http", [])),
+            check("asks for no MakerWorld or Bambu host (the other plugin's job)",
+                  not any("makerworld" in u or "bambulab" in u for u in
+                          package.requested_permissions.get("network_http", [])),
                   str(package.requested_permissions.get("network_http")))
             check("declares the printer URLs and the staging directory",
                   any(u.startswith("http://127.0.0.1") for u in

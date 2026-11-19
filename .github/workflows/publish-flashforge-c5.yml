@@ -1,0 +1,72 @@
+name: Publish FlashForge C5 to OrcaCloud
+
+# Publishes the **FlashForge C5** plugin, and only that plugin.
+#
+# Each plugin in this repo has its own workflow, its own tag prefix and its own
+# version, so the two are released and updated independently: a `makerworld-v*` tag
+# never republishes this one, and vice versa.
+#
+# The tag (e.g. flashforge-vX.Y.Z) becomes the plugin version and
+# must be a semantic version greater than the version currently listed.
+#
+# One-time setup, in the Orca Cloud web portal, **once per plugin**:
+#   Shared Plugins -> your plugin -> Edit plugin -> GitHub publishing
+#   -> enter "ben0551/orca-flashforge-c5" -> Connect
+#
+# No token or secret is stored: each run proves its identity to Orca Cloud with
+# a short-lived credential signed by GitHub (OIDC trusted publishing).
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  # Space-separated globs matching the plugin files to upload (.py / .whl).
+  # The `_any` suffix is Orca Cloud's universal (OS-independent) marker and is
+  # required on uploaded filenames.
+  PLUGIN_FILES: "flashforge-c5_any.py"
+  # Stripped off the release tag to give the version.
+  TAG_PREFIX: "flashforge-v"
+
+jobs:
+  publish:
+    # The tag decides which plugin is being released: `flashforge-vX.Y.Z`.
+    if: startsWith(github.event.release.tag_name, 'flashforge-v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Publish release to OrcaCloud
+        run: |
+          set -euo pipefail
+          oidc_token="$(curl -sS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=orcacloud" | jq -r .value)"
+                    tag="${GITHUB_REF_NAME}"
+          version="${tag#"$TAG_PREFIX"}"
+          if [ "$version" = "$tag" ]; then
+            echo "Release tag '$tag' does not start with '$TAG_PREFIX'" >&2
+            exit 1
+          fi
+          changelog="$(jq -r '.release.body // ""' "$GITHUB_EVENT_PATH" | head -c 4000)"
+          metadata="$(jq -cn --arg version "$version" --arg changelog "$changelog" \
+            '{version: $version} + (if $changelog == "" then {} else {changelog: $changelog} end)')"
+          args=(-F "metadata=$metadata")
+          shopt -s nullglob
+          for file in $PLUGIN_FILES; do
+            args+=(-F "files=@$file")
+          done
+          if [ "${#args[@]}" -eq 1 ]; then
+            echo "No plugin files matched: $PLUGIN_FILES" >&2
+            exit 1
+          fi
+          status="$(curl -sS -o response.json -w '%{http_code}' \
+            -H "Authorization: Bearer $oidc_token" \
+            "${args[@]}" \
+            https://api.orcaslicer.com/api/v1/plugin-publish/releases)"
+          cat response.json
+          echo
+          [ "$status" = "201" ]

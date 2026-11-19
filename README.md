@@ -1,7 +1,10 @@
-# FlashForge C5 — an OrcaSlicer plugin
+# Creator 5 plugins for OrcaSlicer
 
-Send prints to a FlashForge Creator 5 / 5 Pro from inside OrcaSlicer and watch the
-job there, instead of handing the file to FlashForge's own app or a web page.
+Two small plugins that close the two gaps between a FlashForge Creator 5 / 5 Pro
+and OrcaSlicer. **They are separate plugins — installed separately, versioned
+separately and released separately.** Neither imports or depends on the other, so
+you can update one without touching the other, install one without the other, and
+remove one without breaking the other.
 
 FlashForge's Creator 5 firmware exposes a complete local HTTP API on port 8898 —
 status, temperature, the material station, the stored file list, upload, start
@@ -9,16 +12,14 @@ print, pause/resume/cancel, light — but the printer presents itself to a slice
 a cloud-bound Bambu-style device, so OrcaSlicer will not upload to it or show its
 status. This plugin speaks the printer's own LAN protocol from inside OrcaSlicer.
 
-It is one Python file in the standard OrcaSlicer plugin format
+Each is one Python file in the standard OrcaSlicer plugin format
 ([plugin docs](https://www.orcaslicer.com/wiki/developer_reference/plugin_development/plugin_development.html)),
 with no third-party dependencies — nothing is downloaded at plugin load time.
 
-It adds **two tabs**:
-
-- **FlashForge C5** — live status, temperatures, the material station, job
-  control and the files already on the printer.
-- **MakerWorld** — paste a MakerWorld link and get the designer's project rebuilt
-  for the printer you have selected, then opened in OrcaSlicer ready to slice.
+| Plugin file | Adds | Tab |
+|---|---|---|
+| `flashforge-c5_any.py` | a device tab and a printer agent | **FlashForge C5** |
+| `makerworld-c5_any.py` | a converter tab | **MakerWorld** |
 
 ## Requirements
 
@@ -29,25 +30,38 @@ It adds **two tabs**:
   Network for the check code). **If you have already set this printer up in
   OrcaSlicer, you do not need to type any of it** — see *Reading OrcaSlicer's own
   printer settings* below.
-- For the **MakerWorld** tab only, and only when you use a link rather than a file
-  you already have: a **BambuCloud token**. See *The MakerWorld tab* below.
+- For `makerworld-c5` only, and only when you use a link rather than a file you
+  already have: a **BambuCloud token**. See *The MakerWorld tab* below.
 
 ## What you get
+
+**`flashforge-c5`** — the printer itself.
 
 | Capability | Type | What it does |
 |---|---|---|
 | **FlashForge C5** tab | `pages` | Live status, temperatures, the 4-slot material station, job progress, pause/resume/cancel, light and clear-platform, and the files stored on the printer with a plate **preview** and one-click **reprint**. |
-| **MakerWorld** tab | `pages` | Paste a MakerWorld link (or point at a `.3mf`) and get the designer's project rebuilt for the printer you have selected, then opened in OrcaSlicer ready to slice. |
 | **FlashForge Creator 5** | `printer-connection` | Makes OrcaSlicer's own **Send to printer** / **Print** buttons work against the Creator 5. This is the sending path — the tab watches and drives the machine. |
+
+**`makerworld-c5`** — models from MakerWorld.
+
+| Capability | Type | What it does |
+|---|---|---|
+| **MakerWorld** tab | `pages` | Paste a MakerWorld link (or point at a `.3mf`) and get the designer's project rebuilt for the printer you have selected, then opened in OrcaSlicer ready to slice. |
 
 ## Install
 
-1. Open **Plugins** in OrcaSlicer, then **Browse plugins ▾ → Install local
-   plugin**, and pick `flashforge-c5_any.py`.
+Install the plugin you want, or both. Each is independent, and each goes in its
+own folder.
 
-   Or copy the file into its own folder under the OrcaSlicer data directory, e.g.
-   `%APPDATA%\OrcaSlicer\orca_plugins\flashforge-c5\flashforge-c5_any.py`. A
-   plugin folder must contain exactly one entry file (one `.py` or one `.whl`).
+1. Open **Plugins** in OrcaSlicer, then **Browse plugins ▾ → Install local
+   plugin**, and pick `flashforge-c5_any.py` and/or `makerworld-c5_any.py`.
+
+   Or copy each file into its own folder under the OrcaSlicer data directory, e.g.
+   `%APPDATA%\OrcaSlicer\orca_plugins\flashforge-c5\flashforge-c5_any.py` and
+   `%APPDATA%\OrcaSlicer\orca_plugins\makerworld-c5\makerworld-c5_any.py`. A
+   plugin folder must contain exactly one entry file (one `.py` or one `.whl`), so
+   **the two files must not share a folder** — one folder holding both will load
+   neither.
 
    The `_any` suffix is not decoration — Orca Cloud's hub requires a target-OS
    suffix on uploaded plugin files, and `any` is its universal marker for a pure
@@ -236,9 +250,21 @@ worth knowing before you start:
   `flashforge-c5_any.py`.
 
 Publishing is then: connect the repo in **Shared Plugins → Edit plugin → GitHub
-publishing**, fill the portal metadata, and publish a GitHub Release with a
-`vX.Y.Z` tag. `.github/workflows/publish-orcacloud.yml` does the upload over OIDC,
-so there is no token to store.
+publishing**, fill the portal metadata, and publish a GitHub Release. The upload
+runs over OIDC, so there is no token to store.
+
+**There is one workflow per plugin**, because the two versions move
+independently, and the release tag says which one is being published:
+
+| Plugin | Workflow | Release tag | Version published |
+|---|---|---|---|
+| `flashforge-c5` | `.github/workflows/publish-flashforge-c5.yml` | `flashforge-v1.2.0` | `1.2.0` |
+| `makerworld-c5` | `.github/workflows/publish-makerworld-c5.yml` | `makerworld-v1.0.0` | `1.0.0` |
+
+Each workflow ignores a tag that is not its own, so tagging one plugin never
+republishes the other. Each plugin needs its **own** portal listing and its own
+connection; the plugin `name` in its metadata — `FlashForge C5`, `MakerWorld C5` —
+is what tells them apart.
 
 ## Tests
 
@@ -246,15 +272,16 @@ so there is no token to store.
 ./run_tests.sh
 ```
 
-Three suites, none needing OrcaSlicer or a printer:
+Three suites, none needing OrcaSlicer or a printer. Two cover `flashforge-c5`,
+one covers `makerworld-c5`:
 
-- `tests/test_plugin.py` runs the real plugin against a mock Creator 5
+- `tests/test_plugin.py` runs the real `flashforge-c5` plugin against a mock Creator 5
   (`tests/mock_printer.py`) and a stub `orca` module (`tests/fake_orca.py`), then
   drives the tab's message protocol exactly as the page's JavaScript does. It
   asserts on what the *printer* received — header casing, the `gcodeFile` part,
   the `fileSize` header, the extracted G-code bytes, the five-field mapping
   elements — not on what the plugin thinks it sent.
-- `tests/test_makerworld.py` drives the MakerWorld tab end to end: the URL
+- `tests/test_makerworld.py` runs the real `makerworld-c5` plugin end to end: the URL
   parsing, the download (against a stubbed transport, asserting the instance
   endpoint and the bearer header), the conversion, the saved file and the hand-off
   payload. The conversion is asserted key by key — that the designer's layer
@@ -262,7 +289,7 @@ Three suites, none needing OrcaSlicer or a printer:
   the machine's limits, G-code and bed height replace theirs, that per-extruder
   arrays are resized rather than copied, and that the archive's geometry comes
   through byte for byte.
-- `tests/test_page_js.py` extracts each tab's JavaScript and runs it under Node in
+- `tests/test_page_js.py` extracts **each** plugin's tab JavaScript and runs it under Node in
   a DOM stub — the first against the plugin's real normalised `/detail` payload,
   the second against real conversion reports — checking the rendering, the button
   wiring, the file-row actions, and that a failure never replaces the report it

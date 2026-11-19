@@ -1,7 +1,8 @@
-"""Run the tab's JavaScript outside OrcaSlicer.
+"""Run each tab's JavaScript outside OrcaSlicer.
 
-Extracts the page from the plugin, feeds it the plugin's own normalised /detail
-payloads, and runs tests/page_harness.js under node.
+Extracts a page from the plugin that ships it, feeds it that plugin's own
+normalised payloads, and runs the matching node harness. The device tab comes
+from flashforge-c5_any.py, the MakerWorld tab from makerworld-c5_any.py.
 
     python3 tests/test_page_js.py
 """
@@ -91,7 +92,9 @@ def main():
         print("node is not installed — skipping the page checks")
         return 0
 
-    source = os.path.join(ROOT, "flashforge-c5_any.py")
+    device_source = os.path.join(ROOT, "flashforge-c5_any.py")
+    makerworld_source = os.path.join(ROOT, "makerworld-c5_any.py")
+    source = device_source
     page, js = extract_page(source)
 
     work = tempfile.mkdtemp(prefix="ffc5-page-")
@@ -154,7 +157,7 @@ def main():
         failed += 0 if result.returncode == 0 else 1
 
         print()
-        failed += run_makerworld_checks(source, work)
+        failed += run_makerworld_checks(makerworld_source, work)
         return 1 if failed else 0
     finally:
         shutil.rmtree(work, ignore_errors=True)
