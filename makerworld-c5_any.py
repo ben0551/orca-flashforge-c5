@@ -31,7 +31,7 @@ Author: Ben Fischer.  License: MIT.
 # name = "3mf Converter"
 # description = "Rebuild a MakerWorld link or any local .3mf for the printer selected in OrcaSlicer."
 # author = "Ben Fischer"
-# version = "1.1.0"
+# version = "1.2.0"
 # ///
 
 import base64
@@ -377,13 +377,34 @@ def convert_project(project, machine_keys, machine_values, identity):
         elif key in project:
             kept.append(key)
     out.update({k: v for k, v in identity.items() if v is not None})
+    # The designer's extruder count against the printer's, which is the pairing a
+    # user has to check: the tools are matched in order, and a mismatch is where
+    # filament ends up on the wrong one.
+    source_count = len(project.get("nozzle_diameter") or []) or 1
+    target_count = len(machine_values.get("nozzle_diameter") or []) or source_count
+    warnings = []
+    if source_count != target_count:
+        warnings.append({
+            "level": "check",
+            "message": (f"The designer's project was set up for {source_count} "
+                        f"extruder{'s' if source_count != 1 else ''} and this "
+                        f"printer has {target_count}. The tools are matched in "
+                        "order — check the filament assignment before printing."),
+        })
     report = {
-        "extruders": count,
+        "extruders": target_count,
+        "source_extruders": source_count,
         "kept": len(kept),
         "replaced": len(replaced),
         "dropped": len(dropped),
         "kept_examples": sorted(k for k in kept if k in KEEP_INTERESTING),
         "replaced_examples": replaced[:12],
+        # The full lists, not only the counts: the whole point of the report is
+        # being able to check one setting, and a count cannot be checked.
+        "kept_keys": sorted(kept),
+        "replaced_keys": sorted(replaced),
+        "dropped_keys": sorted(dropped),
+        "warnings": warnings,
     }
     return out, report
 
@@ -411,6 +432,61 @@ SLICE_INFO = "Metadata/slice_info.config"
 MAX_UPLOAD_B64 = 128 * 1024 * 1024
 
 
+# The two characters a JSON-encoded preset value can start with.
+JSON_OPENERS = ("[", '\"')
+
+
+def _plain_name(value):
+    """A preset name as a person reads it.
+
+    OrcaSlicer hands several config values back JSON-encoded — sometimes a list,
+    sometimes a quoted string — so a name can arrive as '["Generic PLA @FF C5"]'
+    or with the quotes still on it. Either way the escaping is noise in a report
+    whose whole job is to name the profile.
+    """
+    obj = value
+    if isinstance(obj, (list, tuple)):
+        obj = obj[0] if obj else ""
+    text = str(obj or "").strip()
+    for _ in range(3):
+        if len(text) < 2 or text[0] not in JSON_OPENERS:
+            break
+        try:
+            obj = json.loads(text)
+        except ValueError:
+            break
+        if isinstance(obj, (list, tuple)):
+            obj = obj[0] if obj else ""
+        text = str(obj or "").strip()
+    return text.strip('"').strip()
+
+
+def _plain_text(value):
+    """A multi-line value as written, not as JSON.
+
+    The same encoding applies to G-code blocks, where the newlines arrive as the
+    two characters backslash-n — so a twenty-line start G-code counts as one line
+    and renders as one unreadable paragraph.
+    """
+    if isinstance(value, (list, tuple)):
+        value = "\n".join(str(part) for part in value)
+    text = str(value or "")
+    if not text:
+        return ""
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        parsed = None
+    if isinstance(parsed, str):
+        text = parsed
+    elif parsed is not None and not isinstance(parsed, (dict, list)):
+        text = str(parsed)
+    # A partly-encoded value still carries the escapes, so normalise anyway.
+    if "\\n" in text:
+        text = text.replace("\\r\\n", "\n").replace("\\n", "\n")
+    return text
+
+
 def _per_tool(value, count):
     """One entry per tool, whatever shape the config stored."""
     if isinstance(value, list):
@@ -433,10 +509,16 @@ def filament_summary(config):
     colours = _per_tool(config.get("filament_colour"), count)
     profiles = _per_tool(config.get("filament_settings_id"), count)
     return [{"tool": i + 1,
-             "type": types[i] or "",
-             "colour": colours[i] or "",
-             "profile": profiles[i] or ""}
+             "type": _plain_name(types[i]),
+             "colour": _plain_name(colours[i]),
+             "profile": _plain_name(profiles[i])}
             for i in range(count)]
+
+
+# The report is a summary, so it shows the beginning of the machine G-code and
+# says how much more there is. Enough to recognise the block, not a wall of it.
+GCODE_HEAD_LINES = 6
+GCODE_HEAD_CHARS = 200
 
 
 def gcode_summary(config):
@@ -444,12 +526,20 @@ def gcode_summary(config):
     out = []
     for key, label in (("machine_start_gcode", "start"),
                        ("machine_end_gcode", "end")):
-        text = config.get(key)
-        if not isinstance(text, str) or not text.strip():
+        text = _plain_text(config.get(key))
+        if not text.strip():
             continue
-        lines = text.strip().splitlines()
-        out.append({"which": label, "lines": len(lines),
-                    "head": [line.rstrip() for line in lines[:4]]})
+        lines = [line.rstrip() for line in text.strip().splitlines()]
+        head, used = [], 0
+        for line in lines[:GCODE_HEAD_LINES]:
+            if len(line) > GCODE_HEAD_CHARS:
+                line = line[:GCODE_HEAD_CHARS] + " …"
+            if used + len(line) > GCODE_HEAD_CHARS * 2:
+                break
+            head.append(line)
+            used += len(line)
+        out.append({"which": label, "lines": len(lines), "head": head,
+                    "more": max(0, len(lines) - len(head))})
     return out
 
 
@@ -784,6 +874,14 @@ MAKERWORLD_PAGE = """
   details.help summary { cursor: pointer; color: var(--orca-muted); }
   details.help ol { margin: 6px 0 6px 18px; padding: 0; }
   details.help li { margin-bottom: 2px; }
+  .warn { border-left: 3px solid var(--orca-accent, #2f9e6f); padding-left: 7px;
+          margin: 5px 0; }
+  details.audit { margin: 5px 0; font-size: 12px; }
+  details.audit summary { cursor: pointer; }
+  .keys { max-height: 210px; overflow: auto; margin-top: 4px;
+          border: 1px solid var(--orca-border); border-radius: 4px; padding: 5px; }
+  .keys code { display: inline-block; margin: 0 4px 3px 0; }
+  .meta { color: var(--orca-muted); font-size: 11px; }
 </style>
 
 <h2>3mf Converter</h2>
@@ -844,6 +942,13 @@ temperatures are kept, their machine is replaced. It then opens here, ready to s
 </div>
 
 <div id="report" class="panel" hidden></div>
+
+<div id="convertList" class="panel" hidden>
+  <div style="margin-bottom:6px"><b>Already converted</b>
+    <span class="meta">— kept beside the plugin; open one again without going to
+    find it</span></div>
+  <div id="convFiles"></div>
+</div>
 <div id="banner"></div>
 
 <script>
@@ -910,6 +1015,56 @@ temperatures are kept, their machine is replaced. It then opens here, ready to s
     pick.hidden = false;
   }
 
+  function sizeText(bytes) {
+    if (!bytes) return "";
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1048576) return Math.round(bytes / 1024) + " kB";
+    return (bytes / 1048576).toFixed(1) + " MB";
+  }
+
+  function whenText(seconds) {
+    if (!seconds) return "";
+    var mins = Math.round(Date.now() / 1000 - seconds) / 60;
+    if (mins < 1) return "just now";
+    if (mins < 60) return Math.round(mins) + " min ago";
+    var hours = mins / 60;
+    if (hours < 24) return Math.round(hours) + "h ago";
+    return Math.round(hours / 24) + "d ago";
+  }
+
+  // Attribute values need the quote escaped too, and esc() only handles the
+  // markup characters.
+  function attr(text) {
+    return esc(text).replace(/"/g, "&quot;");
+  }
+
+  function renderFiles(message) {
+    var box = $("convFiles");
+    if (!box || !$("convertList")) return;
+    var files = message.files || [];
+    if (!files.length) {
+      box.innerHTML = "";
+      $("convertList").hidden = true;
+      return;
+    }
+    box.innerHTML = files.map(function (f) {
+      return '<div class="plate"><span>' + esc(f.name) +
+             ' <span class="meta">' + sizeText(f.size) + " &middot; " +
+             whenText(f.modified) + "</span></span>" +
+             '<button data-open="' + attr(f.path) + '">Open</button></div>';
+    }).join("");
+    $("convertList").hidden = false;
+  }
+
+  function keyBox(title, keys) {
+    if (!keys || !keys.length) return "";
+    return '<details class="audit"><summary>' + esc(title) +
+           ' <span class="meta">' + keys.length + "</span></summary>" +
+           '<div class="keys">' + keys.map(function (key) {
+             return "<code>" + esc(key) + "</code>";
+           }).join("") + "</div></details>";
+  }
+
   function renderReport(message) {
     var box = $("report");
     if (!box) return;
@@ -958,14 +1113,29 @@ temperatures are kept, their machine is replaced. It then opens here, ready to s
         }).join("<br>");
         lines.push("&nbsp;&nbsp;" + esc(g.which) + " &mdash; " + g.lines + " line" +
                    (g.lines === 1 ? "" : "s") +
+                   (g.more ? ", first " + g.head.length + " shown" : "") +
                    (head ? ": <code>" + head + "</code>" : ""));
       });
     }
 
     lines.push("Saved as <code>" + esc(message.path) + "</code>");
-    box.innerHTML = lines.map(function (line) {
+    var html = lines.map(function (line) {
       return '<div class="line">' + line + "</div>";
     }).join("");
+
+    (r.warnings || []).forEach(function (w) {
+      html += '<div class="warn"><b>' +
+              (w.level === "check" ? "Check" : "Note") + "</b> &mdash; " +
+              esc(w.message) + "</div>";
+    });
+
+    // The counts above are only trustworthy if the lists behind them can be
+    // read, so every one of them opens.
+    html += keyBox("Kept from the designer", r.kept_keys);
+    html += keyBox("Replaced by your printer", r.replaced_keys);
+    html += keyBox("Reset to OrcaSlicer's defaults", r.dropped_keys);
+
+    box.innerHTML = html;
     box.hidden = false;
   }
 
@@ -984,6 +1154,7 @@ temperatures are kept, their machine is replaced. It then opens here, ready to s
       case "report":
         setBusy(false);
         renderReport(message);
+        post({ type: "list_files" });
         // One message, not two: a follow-up line would replace this one before it
         // could be read.
         if (message.opened) {
@@ -992,6 +1163,19 @@ temperatures are kept, their machine is replaced. It then opens here, ready to s
           showBanner("Converted and saved, but it could not be opened for you (" +
                      message.detail + ").\\nOpen it yourself with File \\u2192 " +
                      "Open Project...\\n" + message.path, "err");
+        }
+        break;
+      case "files":
+        renderFiles(message);
+        break;
+      case "opened":
+        setBusy(false);
+        if (message.opened) {
+          showBanner("Opened in OrcaSlicer.", "ok");
+        } else {
+          showBanner("Converted, but it could not be opened for you (" +
+                     message.detail + "). Open it yourself with File, then " +
+                     "Open Project.", "err");
         }
         break;
       case "log":
@@ -1081,9 +1265,18 @@ temperatures are kept, their machine is replaced. It then opens here, ready to s
     });
   }
 
+  if ($("convFiles")) $("convFiles").addEventListener("click", function (e) {
+    var el = e.target;
+    var path = el && el.getAttribute ? el.getAttribute("data-open") : null;
+    if (!path) return;
+    setBusy(true, "Opening...");
+    post({ type: "open_file", path: path });
+  });
+
   // A panel wired only to setInterval renders empty on first load, so ask once now.
   showBanner("", "");
   post({ type: "hello" });
+  post({ type: "list_files" });
 })();
 </script>
 """
@@ -1125,6 +1318,8 @@ class MakerWorldPage(orca.pages.PagesPluginCapabilityBase):
             "fetch": self._fetch,
             "convert_path": self._convert_path,
             "convert_data": self._convert_data,
+            "list_files": self._list_files,
+            "open_file": self._open_file,
         }.get(msg.get("type"))
         if not handler:
             return
@@ -1223,6 +1418,49 @@ class MakerWorldPage(orca.pages.PagesPluginCapabilityBase):
                          daemon=True).start()
 
     # -- shared ------------------------------------------------------------- #
+
+    def _converted_files(self):
+        """The projects this plugin has converted, newest first.
+
+        They live inside OrcaSlicer's own data directory, several folders down,
+        which is exactly why this list exists — nobody wants to go looking there.
+        """
+        rows = []
+        try:
+            names = os.listdir(CONVERTED_DIR)
+        except OSError:
+            return rows
+        for name in names:
+            if not name.lower().endswith(".3mf"):
+                continue
+            full = os.path.join(CONVERTED_DIR, name)
+            try:
+                stat = os.stat(full)
+            except OSError:
+                continue
+            rows.append({"name": name, "path": full,
+                         "size": stat.st_size, "modified": stat.st_mtime})
+        rows.sort(key=lambda row: row["modified"], reverse=True)
+        return rows
+
+    def _list_files(self, _msg):
+        self.post_message({"type": "files", "files": self._converted_files(),
+                           "dir": CONVERTED_DIR})
+
+    def _open_file(self, msg):
+        """Re-open something already converted, without hunting for the folder."""
+        path = str(msg.get("path") or "")
+        # Only ever hand OrcaSlicer a file this plugin wrote. The path comes from
+        # the page, and a page-supplied path must not become a way to open
+        # anything on the disk.
+        if not path or (os.path.normcase(os.path.abspath(os.path.dirname(path)))
+                        != os.path.normcase(os.path.abspath(CONVERTED_DIR))):
+            raise MakerWorldError("That file is not one of this plugin's conversions.")
+        if not os.path.exists(path):
+            raise MakerWorldError("That file is no longer there.")
+        opened, detail = load_into_orca([path])
+        self.post_message({"type": "opened", "path": path,
+                           "opened": bool(opened), "detail": detail})
 
     def _ensure_dirs(self):
         try:

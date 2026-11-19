@@ -492,6 +492,116 @@ def main():
               bool(err) and "larger than" in err[-1]["message"], str(err)[:160])
 
         print()
+        print("Decoding what OrcaSlicer hands back")
+        # A backslash, built rather than written: the escaping is what is under
+        # test here, and a literal one in a test string is easy to get wrong.
+        BS = chr(92)
+        # A preset hands some config back JSON-encoded, so a profile name arrives
+        # with the quotes still on it and a G-code block arrives on one line.
+        quoted = '"' + BS + '"Generic PLA @Flashforge' + BS + '"' + '"'
+        check("a quoted preset name is unwrapped for reading",
+              plugin._plain_name(quoted) == "Generic PLA @Flashforge",
+              repr(plugin._plain_name(quoted)))
+        check("a JSON list of one name gives the name",
+              plugin._plain_name('["Generic PLA @FF C5"]') == "Generic PLA @FF C5"
+              and plugin._plain_name(["PLA"]) == "PLA")
+        check("an ordinary name and a bare colour are left alone",
+              plugin._plain_name("Generic PLA @FF C5") == "Generic PLA @FF C5"
+              and plugin._plain_name("#000000") == "#000000"
+              and plugin._plain_name(None) == "")
+
+        escaped = ";start_gcode" + BS + "nG28" + BS + "nM104 S0"
+        check("an escaped G-code block becomes real lines",
+              plugin._plain_text(escaped).splitlines() == [";start_gcode", "G28", "M104 S0"],
+              repr(plugin._plain_text(escaped)))
+        check("a block that already has real newlines is untouched",
+              plugin._plain_text("a\nb") == "a\nb")
+
+        print()
+        print("The audit behind the counts")
+        cfg, rep = plugin.convert_project(
+            {"layer_height": "0.2", "printable_area": ["0x0"], "machine_start_gcode": "X"},
+            {"printable_area", "machine_start_gcode"},
+            {"printable_area": ["0x0", "1x0", "1x1", "0x1"], "machine_start_gcode": "Y"},
+            {})
+        check("every kept and replaced key is listed, not only counted",
+              rep["kept_keys"] == ["layer_height"]
+              and rep["replaced_keys"] == ["machine_start_gcode", "printable_area"]
+              and rep["kept"] == 1 and rep["replaced"] == 2, str(rep))
+
+        cfg2, rep2 = plugin.convert_project(
+            {"printer_model": "Bambu Lab P1P", "layer_height": "0.2"},
+            {"printer_model"}, {}, {})
+        check("a machine key the printer has no value for is reported as reset",
+              rep2["dropped_keys"] == ["printer_model"]
+              and rep2["dropped"] == 1 and rep2["kept_keys"] == ["layer_height"],
+              str(rep2))
+
+        cfg3, rep3 = plugin.convert_project(
+            {"nozzle_diameter": ["0.4"], "layer_height": "0.2"},
+            {"nozzle_diameter"},
+            {"nozzle_diameter": ["0.4", "0.4", "0.4", "0.4"]}, {})
+        check("a tool-count mismatch is warned about, with both numbers",
+              len(rep3["warnings"]) == 1
+              and "1" in rep3["warnings"][0]["message"]
+              and "4" in rep3["warnings"][0]["message"],
+              str(rep3["warnings"]))
+        check("a matching tool count raises no warning",
+              plugin.convert_project({"nozzle_diameter": ["0.4"]},
+                                     {"nozzle_diameter"},
+                                     {"nozzle_diameter": ["0.4"]},
+                                     {})[1]["warnings"] == [])
+
+        # The G-code shown is a head, not the block: the observed one was 20 lines
+        # of fan and temperature setup that filled the panel.
+        long_gcode = (BS + "n").join([";start"] +
+                                     ["G1 X%d Y%d F6000" % (i, i) for i in range(30)])
+        rows = plugin.gcode_summary({"machine_start_gcode": long_gcode})
+        check("the G-code head is capped and the rest is counted",
+              rows[0]["lines"] == 31 and len(rows[0]["head"]) <= plugin.GCODE_HEAD_LINES
+              and rows[0]["more"] == 31 - len(rows[0]["head"]), str(rows[0])[:200])
+        check("the G-code is counted as lines, not as one blob",
+              rows[0]["lines"] > 1, str(rows[0]["lines"]))
+
+        print()
+        print("Re-opening an earlier conversion")
+        CONVERTED_DIR = plugin.CONVERTED_DIR
+        listed = page._converted_files()
+        check("the conversions already on disk are listed, newest first",
+              bool(listed) and all(r["name"].endswith(".3mf") for r in listed)
+              and listed[0]["modified"] >= listed[-1]["modified"], str(listed)[:200])
+        inbox.clear()
+        page.on_message({"type": "list_files"})
+        msg = [m for m in inbox if m.get("type") == "files"]
+        check("the list carries each file's path, size and age",
+              bool(msg) and msg[0]["files"]
+              and os.path.isabs(msg[0]["files"][0]["path"])
+              and msg[0]["files"][0]["size"] > 0
+              and msg[0]["files"][0]["modified"] > 0, str(msg)[:200])
+
+        inbox.clear()
+        target_path = listed[0]["path"]
+        page.on_message({"type": "open_file", "path": target_path})
+        opened = [m for m in inbox if m.get("type") == "opened"]
+        check("opening a listed conversion hands it back to OrcaSlicer",
+              bool(opened) and opened[0]["path"] == target_path, str(opened)[:200])
+
+        inbox.clear()
+        page.on_message({"type": "open_file",
+                         "path": os.path.join(workdir, "elsewhere.3mf")})
+        err = [m for m in inbox if m.get("type") == "error"]
+        check("a path from outside the plugin's folder is refused",
+              bool(err) and "not one of this plugin's conversions" in err[-1]["message"],
+              str(err)[:200])
+
+        inbox.clear()
+        page.on_message({"type": "open_file",
+                         "path": os.path.join(CONVERTED_DIR, "gone.3mf")})
+        err = [m for m in inbox if m.get("type") == "error"]
+        check("a listed file that has since gone is reported",
+              bool(err) and "no longer there" in err[-1]["message"], str(err)[:200])
+
+        print()
         print("The tab's message flow")
         # the "no printer selected" case above uninstalled the bundle; put it back
         orca_stub.install_preset_bundle(fake_orca.FakePresetBundle(

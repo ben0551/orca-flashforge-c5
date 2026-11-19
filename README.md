@@ -155,11 +155,24 @@ a fresh one. It lives in `settings.json` beside the plugin (mode 0600) and goes 
 MakerWorld and nowhere else.
 
 **What the report tells you.** After a conversion the tab says what came *out*, not
-just how many settings moved: every plate in the file and the filament each one
-uses; the tools the project ends up with, and the filament and profile behind each;
-and the machine start and end G-code that was swapped for your printer's. A
-MakerWorld `.3mf` is unsliced and carries no `.gcode` at all, so the G-code shown is
-the machine block the conversion actually replaced.
+just how many settings moved:
+
+- **Every plate** in the file and the filament each one uses.
+- **The tools** the project ends up with, and the filament and profile behind each.
+- **The machine start and end G-code** that was swapped for your printer's, capped to
+  a readable head with the line count, since these blocks run to dozens of lines of
+  fan and temperature setup. A MakerWorld `.3mf` is unsliced and carries no `.gcode`
+  at all, so the G-code shown is the machine block the conversion actually replaced.
+- **The full audit** — an expandable list of every key that was kept from the
+  designer, every key replaced by your printer, and every key reset to OrcaSlicer's
+  defaults. The counts in the summary are only worth trusting if the lists behind
+  them can be read.
+- **A warning when the tool counts differ**, because that is where filament ends up
+  on the wrong extruder.
+
+**Opening an earlier conversion.** Converted projects are kept in a folder inside
+OrcaSlicer's own data directory, several levels down and awkward to reach. The tab
+lists them — newest first, with size and age — and opens one again with a click.
 
 **What is kept and what is replaced.** OrcaSlicer already knows which settings
 belong to a machine: `Preset::printer_options()` is that list, and the plugin uses

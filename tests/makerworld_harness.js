@@ -395,6 +395,94 @@ must("a file with no plates or G-code still reports cleanly", () => {
   assert(html.indexOf("Saved as") >= 0, "the saved path went missing: " + html);
 });
 
+console.log("\nRe-opening an earlier conversion");
+must("the list renders one row per file, with its size and age", () => {
+  deliver({ type: "files", files: [
+    { name: "Benchy - FF.3mf", path: "/plugins/converted/Benchy - FF.3mf",
+      size: 3145728, modified: Date.now() / 1000 - 120 },
+    { name: "Tower.3mf", path: "/plugins/converted/Tower.3mf",
+      size: 2048, modified: Date.now() / 1000 - 90000 }] });
+  const html = byId["convFiles"].innerHTML;
+  assert(html.indexOf("Benchy - FF.3mf") >= 0, "no file row: " + html);
+  assert(html.indexOf("3.0 MB") >= 0, "size not humanised: " + html);
+  assert(html.indexOf("2 kB") >= 0, "small size not humanised: " + html);
+  assert(html.indexOf("min ago") >= 0, "age not shown: " + html);
+  assert(!byId["convertList"].hidden, "the panel stayed hidden");
+});
+must("clicking Open posts that file's path", () => {
+  sent.length = 0;
+  byId["convFiles"].dispatch("click", {
+    target: { getAttribute: k => k === "data-open" ? "/plugins/converted/Tower.3mf" : null },
+  });
+  const msg = sent.filter(m => m.type === "open_file")[0];
+  assert(msg && msg.path === "/plugins/converted/Tower.3mf",
+         "posted: " + JSON.stringify(sent));
+});
+must("a click that is not on a file's button posts nothing", () => {
+  sent.length = 0;
+  byId["convFiles"].dispatch("click", { target: { getAttribute: () => null } });
+  assert(sent.length === 0, "posted anyway: " + JSON.stringify(sent));
+});
+must("a closed file is reported with a way to open it by hand", () => {
+  deliver({ type: "opened", path: "/x.3mf", opened: false, detail: "dbus-send unavailable" });
+  assert(byId["banner"].className === "err", "not shown as an error");
+  assert(byId["banner"].textContent.indexOf("Open Project") >= 0,
+         "no fallback offered: " + byId["banner"].textContent);
+});
+must("an empty list hides the panel rather than showing an empty box", () => {
+  deliver({ type: "files", files: [] });
+  assert(byId["convertList"].hidden, "the panel stayed visible");
+});
+
+console.log("\nThe audit behind the counts");
+must("the full key lists are rendered, not only the counts", () => {
+  deliver({ type: "report", path: "/tmp/x.3mf", opened: true,
+    report: { printer: "P", source_printer: "S", kept: 2, replaced: 1, dropped: 1,
+              kept_examples: ["layer_height"],
+              kept_keys: ["layer_height", "wall_loops"],
+              replaced_keys: ["machine_start_gcode"],
+              dropped_keys: ["printer_model"],
+              plates: [], filaments: [], gcode: [],
+              warnings: [{ level: "check", message: "1 extruder and this printer has 4." }] } });
+  const html = byId["report"].innerHTML;
+  assert(html.indexOf("Kept from the designer") >= 0, "no kept section");
+  assert(html.indexOf("Replaced by your printer") >= 0, "no replaced section");
+  assert(html.indexOf("Reset to OrcaSlicer&#39;s defaults") >= 0 ||
+         html.indexOf("Reset to OrcaSlicer's defaults") >= 0, "no reset section");
+  assert(html.indexOf("wall_loops") >= 0, "kept keys missing: " + html);
+  assert(html.indexOf("machine_start_gcode") >= 0, "replaced keys missing");
+  assert(html.indexOf("printer_model") >= 0, "dropped keys missing");
+  assert(html.indexOf("1 extruder and this printer has 4.") >= 0, "no warning shown");
+});
+must("a report with no lists still renders its summary", () => {
+  deliver({ type: "report", path: "/tmp/x.3mf", opened: true,
+    report: { printer: "P", source_printer: "S", kept: 0, replaced: 0, dropped: 0,
+              kept_examples: [], plates: [], filaments: [], gcode: [], warnings: [] } });
+  const html = byId["report"].innerHTML;
+  assert(html.indexOf("Saved as") >= 0, "the saved path went missing: " + html);
+  assert(html.indexOf("class='keys'") < 0 && html.indexOf('class="keys"') < 0,
+         "an empty list rendered a box");
+});
+must("the G-code says how much of it is not being shown", () => {
+  deliver({ type: "report", path: "/tmp/x.3mf", opened: true,
+    report: { printer: "P", source_printer: "S", kept: 0, replaced: 0, dropped: 0,
+              kept_examples: [], plates: [], filaments: [], warnings: [],
+              gcode: [{ which: "start", lines: 31, head: [";start_gcode", "G28"],
+                        more: 29 }] } });
+  const html = byId["report"].innerHTML;
+  assert(html.indexOf("31 line") >= 0, "no line count: " + html);
+  assert(html.indexOf("first 2 shown") >= 0, "no truncation note: " + html);
+  assert(html.indexOf("&quot;&quot;") < 0, "escaped quotes leaked: " + html);
+});
+must("a finished conversion refreshes the list", () => {
+  sent.length = 0;
+  deliver({ type: "report", path: "/tmp/x.3mf", opened: true,
+    report: { printer: "P", source_printer: "S", kept: 0, replaced: 0, dropped: 0,
+              kept_examples: [], plates: [], filaments: [], gcode: [], warnings: [] } });
+  assert(sent.some(m => m.type === "list_files"),
+         "the list was not refreshed: " + JSON.stringify(sent));
+});
+
 check("no null-element lookups fired during the run", errors.length === 0,
       errors.join("; "));
 
