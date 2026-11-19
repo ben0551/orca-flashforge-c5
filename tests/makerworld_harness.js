@@ -13,6 +13,7 @@ const fs = require("fs");
 const vm = require("vm");
 
 const JS_SOURCE = fs.readFileSync(process.argv[2], "utf8");
+const idsPath = process.argv[3];
 
 let failures = 0;
 function check(name, condition, detail) {
@@ -60,8 +61,17 @@ function makeEl(id) {
   return el;
 }
 
-const IDS = ["banner", "token", "saveToken", "url", "resolve", "pick", "pickTitle",
-             "plates", "path", "convertPath", "report"];
+const FALLBACK_IDS = ["banner", "token", "saveToken", "url", "resolve", "pick",
+             "pickTitle", "plates", "path", "convertPath", "report"];
+
+// The ids come from the real markup, so this stub cannot drift out of sync with
+// the page — a page that looks up an element it never defines is precisely the
+// failure this harness exists to catch, and a stale list here would hide it.
+let IDS = FALLBACK_IDS;
+if (idsPath && fs.existsSync(idsPath)) {
+  const fromMarkup = JSON.parse(fs.readFileSync(idsPath, "utf8"));
+  IDS = Array.from(new Set(FALLBACK_IDS.concat(fromMarkup)));
+}
 const byId = {};
 IDS.forEach(id => { byId[id] = makeEl(id); });
 // Mirrors the markup: these two start hidden and the page only ever reveals them.

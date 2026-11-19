@@ -39,7 +39,7 @@ with no third-party dependencies — nothing is downloaded at plugin load time.
 
 | Capability | Type | What it does |
 |---|---|---|
-| **FlashForge C5** tab | `pages` | Live status, temperatures, the 4-slot material station, job progress, pause/resume/cancel, light and clear-platform, and the files stored on the printer with a plate **preview** and one-click **reprint**. |
+| **FlashForge C5** tab | `pages` | Live status, temperatures, the 4-slot material station, a **live camera view**, job progress, pause/resume/cancel, light and clear-platform, and the files stored on the printer with a plate **preview** and one-click **reprint**. |
 | **FlashForge Creator 5** | `printer-connection` | Makes OrcaSlicer's own **Send to printer** / **Print** buttons work against the Creator 5. This is the sending path — the tab watches and drives the machine. |
 
 **`makerworld-c5`** — models from MakerWorld.
@@ -96,6 +96,13 @@ The tab watches and drives the printer. Sending is OrcaSlicer's own button.
   platform. `/control` acknowledges every command whether or not it does
   anything, so each one is confirmed by re-reading the printer's state, and the
   tab says plainly when a command was accepted but demonstrably ignored.
+- **Camera** switches on the printer's live view. The firmware gates its MJPEG
+  server: it serves nothing until the stream is started, and it holds **one
+  viewer at a time**, so the tab opens the stream when you ask for it and closes
+  it when you stop or leave — which is also what frees the camera for
+  OrcaSlicer's own device panel. Verified at 640×480, roughly 2 frames a second.
+  It is the same feed the printer's own screen shows, so it is only private on
+  your LAN to the extent your LAN is.
 
 Two things the plugin does that the raw API does not:
 
@@ -325,6 +332,10 @@ Verified by the test suites above:
   sliced as a Bambu Lab P1P, with the designer's machine limits and G-code, and a
   controlled edit proved the designer's values survive conversion while the
   machine's replace theirs.
+- **The camera frame parser, against the real printer.** Run over the live MJPEG
+  stream from a Creator 5 Pro at `192.168.8.128:8080`: every frame a complete
+  640×480 baseline JPEG with a full scan, consecutive frames all different — a
+  live view rather than a frozen or truncated one, at roughly two frames a second.
 - Zero third-party dependencies; standard library only.
 
 Not verified here, because it needs the real application and the real printer:
@@ -343,6 +354,12 @@ Not verified here, because it needs the real application and the real printer:
   OrcaSlicer from here. If the hand-off is refused (the audit hook matches
   `process` targets verbatim, so a differently-resolved `dbus-send` would not
   match), the tab says so and prints the path to open by hand instead.
+- **Whether the printer really stops its MJPEG server when this plugin lets go.**
+  The `streamCtrl` open and close commands are asserted against the mock and come
+  from a client verified against this firmware, but they have not been sent to a
+  real machine from here. If the printer does not release the stream on
+  disconnect, the camera stays held by whichever viewer last opened it — which the
+  firmware's one-client-per-open rule makes the failure to watch for.
 - **Whether `preset_bundle()` actually surfaces those keys on a real install.**
   The plugin API exposes the printer preset collection but *not* Physical Printer
   profiles, and a modern OrcaSlicer keeps `print_host`,

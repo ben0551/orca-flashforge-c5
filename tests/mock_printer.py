@@ -249,3 +249,71 @@ class MockServer:
     def __exit__(self, *exc):
         self.httpd.shutdown()
         self.httpd.server_close()
+
+
+class MockCamera:
+    """Stands in for the printer's MJPEG server, on its own port.
+
+    The real thing is gated by `streamCtrl open` and holds exactly one client per
+    open, so this records each connect and disconnect: a reader that walks off
+    without closing leaves the printer's camera dead for the next one, and that
+    is only visible if the double notices.
+    """
+
+    def __init__(self, frames=3, chunk=4096):
+        self.frames = frames
+        self.chunk = chunk
+        self.connects = 0
+        self.disconnects = 0
+        cam = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_GET(self):
+                cam.connects += 1
+                try:
+                    body = mjpeg_stream(cam.frames)
+                    self.send_response(200)
+                    self.send_header(
+                        "Content-Type",
+                        "multipart/x-mixed-replace;boundary=boundarydonotcross")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    for i in range(0, len(body), cam.chunk):
+                        self.wfile.write(body[i:i + cam.chunk])
+                        self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                finally:
+                    cam.disconnects += 1
+
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.port = self.httpd.server_address[1]
+        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        # The real server is only up while the printer says it is.
+        self.enabled = False
+
+    @staticmethod
+    def frame(i):
+        """A stand-in JPEG: the real SOI/EOI markers, with a nameable payload."""
+        return b"\xff\xd8" + b"FAKE-FRAME-" + str(i).encode() + b"\xff\xd9"
+
+    def __enter__(self):
+        self.thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self.httpd.shutdown()
+        self.httpd.server_close()
+
+
+def mjpeg_stream(frames=3):
+    """The multipart body the printer sends, as one blob, for parser tests."""
+    out = b""
+    for i in range(frames):
+        out += (b"--boundarydonotcross\r\n"
+                b"Content-Type: image/jpeg\r\n\r\n"
+                + MockCamera.frame(i) + b"\r\n")
+    return out + b"--boundarydonotcross--\r\n"

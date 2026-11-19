@@ -35,6 +35,23 @@ def extract_page(source_path):
     return page, page[start:end]
 
 
+def page_ids(page):
+    """Every element id the markup actually defines."""
+    return sorted(set(re.findall(r'id="([A-Za-z0-9_-]+)"', page)))
+
+
+def missing_elements(page, js):
+    """Ids the script looks up that the markup never defines.
+
+    A null element write throws and aborts the whole inline script, so this is
+    the failure the DOM stub exists to catch — it has to be computed from the
+    markup, or a stale stub would hide exactly the bug it guards.
+    """
+    looked_up = set(re.findall(r'\$\("#?([A-Za-z0-9_-]+)"\)', js))
+    looked_up |= set(re.findall(r'getElementById\("([A-Za-z0-9_-]+)"\)', js))
+    return sorted(looked_up - set(page_ids(page)))
+
+
 def extract_makerworld_page(source_path):
     """The second tab, which is a plain (non-raw) string."""
     text = open(source_path, encoding="utf-8").read()
@@ -53,6 +70,9 @@ def run_makerworld_checks(source, work):
     js_path = os.path.join(work, "makerworld.js")
     with open(js_path, "w", encoding="utf-8") as fh:
         fh.write(js)
+    ids_path = os.path.join(work, "makerworld-ids.json")
+    with open(ids_path, "w", encoding="utf-8") as fh:
+        json.dump(page_ids(page), fh)
 
     print("MakerWorld tab markup")
     checks = [
@@ -72,13 +92,17 @@ def run_makerworld_checks(source, work):
          "Open Project" in js),
         ("the page asks for its state on load rather than waiting for a timer",
          'post({ type: "hello" })' in js),
+        ("every element the script looks up is defined in the markup",
+         not missing_elements(page, js), str(missing_elements(page, js))),
     ]
     failed = 0
-    for name, ok in checks:
-        print(f"  [{'PASS' if ok else 'FAIL'}] {name}")
+    for name, ok, *rest in checks:
+        detail = rest[0] if rest and not ok else ""
+        print(f"  [{'PASS' if ok else 'FAIL'}] {name}" + (f" — {detail}" if detail else ""))
         failed += 0 if ok else 1
 
-    result = subprocess.run(["node", os.path.join(HERE, "makerworld_harness.js"), js_path],
+    result = subprocess.run(["node", os.path.join(HERE, "makerworld_harness.js"),
+                             js_path, ids_path],
                             capture_output=True, text=True)
     print(result.stdout)
     if result.stderr.strip():
@@ -102,6 +126,9 @@ def main():
         js_path = os.path.join(work, "page.js")
         with open(js_path, "w", encoding="utf-8") as fh:
             fh.write(js)
+        ids_path = os.path.join(work, "page-ids.json")
+        with open(ids_path, "w", encoding="utf-8") as fh:
+            json.dump(page_ids(page), fh)
 
         # Real payloads from the plugin, not hand-written fixtures.
         sys.modules["orca"] = fake_orca.make_module()
@@ -142,14 +169,19 @@ def main():
              'id="borca"' in page and 'type: "load_orca"' in js),
             ("the spool card shows a colour name, not a hex code",
              's.color_name' in js),
+            ("the tab offers a live camera view",
+             'id="bcam"' in page and 'id="camimg"' in page),
+            ("every element the script looks up is defined in the markup",
+             not missing_elements(page, js), str(missing_elements(page, js))),
         ]
         failed = 0
-        for name, ok in checks:
-            print(f"  [{'PASS' if ok else 'FAIL'}] {name}")
+        for name, ok, *rest in checks:
+            detail = rest[0] if rest and not ok else ""
+            print(f"  [{'PASS' if ok else 'FAIL'}] {name}" + (f" — {detail}" if detail else ""))
             failed += 0 if ok else 1
 
         result = subprocess.run(["node", os.path.join(HERE, "page_harness.js"),
-                                 js_path, states_path],
+                                 js_path, states_path, ids_path],
                                 capture_output=True, text=True)
         print(result.stdout)
         if result.stderr.strip():

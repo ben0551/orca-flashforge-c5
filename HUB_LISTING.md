@@ -92,8 +92,13 @@ page.
 >
 > - **FlashForge C5 tab** — live print status and progress, nozzle and bed
 >   temperatures, the 4-slot material station with the colour loaded in each slot,
->   pause / resume / cancel, chamber light and clear-platform, and a browser for
->   the files already on the printer with a plate preview and one-click reprint.
+>   a **live camera view**, pause / resume / cancel, chamber light and
+>   clear-platform, and a browser for the files already on the printer with a
+>   plate preview and one-click reprint.
+> - **The camera, handled properly** — the firmware gates its MJPEG server and
+>   serves one viewer at a time, so the tab starts the stream when you ask, closes
+>   it when you stop or leave, and hands the camera back rather than leaving it
+>   wedged.
 > - **Plate previews** — the firmware keeps a thumbnail beside every stored job
 >   and serves it from its own `/gcodeThumb` route; the tab fetches it so you can
 >   see what a file is before reprinting it.

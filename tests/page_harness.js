@@ -14,6 +14,7 @@ const vm = require("vm");
 
 const jsPath = process.argv[2];
 const statesPath = process.argv[3];
+const idsPath = process.argv[4];
 const JS_SOURCE = fs.readFileSync(jsPath, "utf8");
 const STATES = JSON.parse(fs.readFileSync(statesPath, "utf8"));
 
@@ -64,12 +65,21 @@ function makeEl(id) {
   };
 }
 
-const IDS = ["banner", "pname", "pip", "pfw", "dot", "stt", "jfile", "barfill",
+const FALLBACK_IDS = ["banner", "pname", "pip", "pfw", "dot", "stt", "jfile", "barfill",
   "jpct", "jlay", "jel", "jrem", "nozzles", "tbed", "tch", "tdoor", "tdisk",
   "spools", "upwrap", "upbar", "uplabel", "files", "prevwrap", "prevname",
   "previmg", "host",
   "port", "serial", "code", "poll", "bsave", "borca", "cfginfo", "bpause", "bresume",
   "bcancel", "blight", "bclear", "setup"];
+
+// The ids come from the real markup, so this stub cannot drift out of sync with
+// the page — a page that looks up an element it never defines is precisely the
+// failure this harness exists to catch, and a stale list here would hide it.
+let IDS = FALLBACK_IDS;
+if (idsPath && fs.existsSync(idsPath)) {
+  const fromMarkup = JSON.parse(fs.readFileSync(idsPath, "utf8"));
+  IDS = Array.from(new Set(FALLBACK_IDS.concat(fromMarkup)));
+}
 const byId = {};
 IDS.forEach(id => { byId[id] = makeEl(id); });
 
@@ -390,6 +400,48 @@ must("the preview panel survives a failed preview", () => {
   deliver({ type: "error", message: "The printer has no preview for that file" });
   assert(byId["banner"].className === "err", "the failure was not shown");
   assert(byId["banner"].textContent.includes("no preview"), "error text missing");
+});
+
+console.log("\nThe camera");
+must("the camera button starts the stream", () => {
+  sent.length = 0;
+  byId["bcam"].dispatch("click");
+  assert(sent.some(m => m.type === "camera_on"),
+         "clicking the camera button posted: " + JSON.stringify(sent));
+});
+must("a camera message reveals the panel and renames the button", () => {
+  deliver({ type: "camera", on: true });
+  assert(byId["camwrap"].className === "", "the panel stayed hidden");
+  assert(byId["bcam"].textContent === "Stop camera",
+         "button label: " + byId["bcam"].textContent);
+});
+must("a frame paints the image and drops the placeholder", () => {
+  deliver({ type: "frame", image: "data:image/jpeg;base64,AAAA" });
+  assert(byId["camimg"].src === "data:image/jpeg;base64,AAAA",
+         "frame not painted: " + byId["camimg"].src);
+  assert(byId["camnote"].textContent === "",
+         "the placeholder outlived the first frame: " + byId["camnote"].textContent);
+});
+must("a second click stops the stream rather than opening another", () => {
+  sent.length = 0;
+  byId["bcam"].dispatch("click");
+  assert(sent.some(m => m.type === "camera_off"),
+         "the toggle posted: " + JSON.stringify(sent));
+});
+must("a frame arriving after the stop cannot repaint the panel", () => {
+  deliver({ type: "camera", on: false });
+  assert(byId["camwrap"].className === "hidden", "the panel stayed open");
+  assert(byId["bcam"].textContent === "View camera",
+         "button label: " + byId["bcam"].textContent);
+  deliver({ type: "frame", image: "data:image/jpeg;base64,BBBB" });
+  assert(!byId["camimg"].src,
+         "a late frame repainted the panel: " + byId["camimg"].src);
+});
+must("stopping the camera clears the last frame", () => {
+  deliver({ type: "camera", on: true });
+  deliver({ type: "frame", image: "data:image/jpeg;base64,AAAA" });
+  deliver({ type: "camera", on: false });
+  assert(!byId["camimg"].src, "the stale frame was left behind");
 });
 
 check("no null-element lookups fired during the run", errors.length === 0,

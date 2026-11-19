@@ -35,7 +35,7 @@ Author: Ben Fischer.  License: MIT.
 # name = "FlashForge C5"
 # description = "Send prints to a FlashForge Creator 5 / 5 Pro over LAN and watch the job inside OrcaSlicer."
 # author = "Ben Fischer"
-# version = "1.2.0"
+# version = "1.3.0"
 # ///
 
 import base64
@@ -65,6 +65,14 @@ AGENT_ID = "flashforge_c5"
 DEFAULT_API_PORT = 8898
 DEFAULT_CAM_PORT = 8080
 DEFAULT_CAM_PATH = "/?action=stream"
+# The printer's MJPEG server is gated: it serves nothing until `streamCtrl open`,
+# and it serves exactly *one* client per open — when that client disconnects the
+# server stops again. It also needs a moment to spin the encoder up, so the first
+# connect is retried rather than reported as a failure. These are the timings a
+# working client of this printer settled on.
+CAM_OPEN_TRIES = 4
+CAM_WARMUP_S = 2.0
+CAM_RETRY_S = 3.0
 
 # Machine states in which the job block of /detail is meaningful. Outside these
 # the firmware pads the block with uninitialised memory (see job_metric below),
@@ -407,6 +415,54 @@ class Creator5:
         detail = data.get("gcodeListDetail") or []
         return list(names), list(detail)
 
+    # -- camera ------------------------------------------------------------- #
+
+    def stream_ctrl(self, on):
+        """Start or stop the printer's MJPEG server.
+
+        The command name is ``streamCtrl`` with **no** ``_cmd`` suffix, unlike
+        ``lightControl_cmd`` and ``jobCtl_cmd``. The firmware answers "Success"
+        to anything it does not recognise, so these strings are load-bearing.
+        """
+        return self.control("streamCtrl", {"action": "open" if on else "close"})
+
+    def camera_frames(self, on_stop=None, timeout=8):
+        """Yield JPEG frames from the printer's camera.
+
+        Opens the stream, yields frames until `on_stop()` says stop, then closes
+        the stream — which is not optional. The printer serves one client per
+        `streamCtrl open` and stops its server when that client goes away, so a
+        reader that walks off without closing leaves the camera dead for the next
+        one, and for OrcaSlicer's own device panel.
+        """
+        if not self.host:
+            raise PrinterError("Printer address is not set")
+        url = f"http://{self.host}:{DEFAULT_CAM_PORT}{DEFAULT_CAM_PATH}"
+        self.stream_ctrl(True)
+        response, last = None, None
+        for attempt in range(CAM_OPEN_TRIES):
+            time.sleep(CAM_WARMUP_S if attempt == 0 else CAM_RETRY_S)
+            try:
+                response = urllib.request.urlopen(url, timeout=timeout)
+                break
+            except Exception as exc:                    # noqa: BLE001
+                last = exc
+        if response is None:
+            self.stream_ctrl(False)
+            raise PrinterError(
+                f"Camera did not start ({type(last).__name__}: {last})")
+        try:
+            for frame in mjpeg_frames(response.read):
+                yield frame
+                if on_stop and on_stop():
+                    return
+        finally:
+            try:
+                response.close()
+            except Exception:
+                pass
+            self.stream_ctrl(False)
+
     # -- upload ------------------------------------------------------------- #
 
     def upload(self, file_path, print_now=False, leveling=True, timeout=600,
@@ -535,6 +591,38 @@ def control_checked(client, cmd, args, verify, tries=CONTROL_CONFIRM_TRIES,
             if verify(detail):
                 return True, detail, shape
     return False, None, None
+
+
+# An MJPEG frame is a JPEG (FFD8 … FFD9) inside a multipart part. The firmware's
+# Content-Length is not dependable, and the stream can be cut mid-part when the
+# printer stops its server, so frames are delimited by the JPEG markers
+# themselves rather than by the multipart boundary.
+JPEG_SOI = b"\xff\xd8"
+JPEG_EOI = b"\xff\xd9"
+
+
+def mjpeg_frames(read, chunk=16384):
+    """Yield each JPEG frame from an MJPEG stream.
+
+    `read(n)` returns the next chunk of bytes, or b"" once the stream ends.
+    """
+    buf = b""
+    while True:
+        block = read(chunk)
+        if not block:
+            return
+        buf += block
+        while True:
+            start = buf.find(JPEG_SOI)
+            if start < 0:
+                buf = buf[-1:]          # a two-byte marker can straddle chunks
+                break
+            end = buf.find(JPEG_EOI, start + 2)
+            if end < 0:
+                buf = buf[start:]
+                break
+            yield buf[start:end + 2]
+            buf = buf[end + 2:]
 
 
 # --------------------------------------------------------------------------- #
@@ -960,6 +1048,21 @@ PAGE = r"""
   </div>
 
   <div class="card">
+    <h3>Camera</h3>
+    <div class="row" style="margin-top:2px">
+      <button id="bcam">View camera</button>
+      <span class="small dim" id="camhint" style="align-self:center">
+        One viewer at a time — the printer stops the stream when you switch it off.
+      </span>
+    </div>
+    <div id="camwrap" class="hidden" style="margin-top:9px">
+      <img id="camimg" alt="printer camera"
+           style="width:100%;max-width:520px;border:1px solid var(--line);border-radius:6px;background:#141518">
+      <div class="small dim" id="camnote" style="margin-top:4px">Starting the stream…</div>
+    </div>
+  </div>
+
+  <div class="card">
     <h3>Material station</h3>
     <div class="spools" id="spools"><span class="dim small">waiting for the printer…</span></div>
   </div>
@@ -1091,7 +1194,7 @@ PAGE = r"""
     }).map(function(k){ return CFG_LABEL[k] || k; }).join(", ");
   }
 
-  var state = { spools: [], status: null, cfg: null, files: [] };
+  var state = { spools: [], status: null, cfg: null, files: [], camera: false };
   var pollTimer = null, uploadTimer = null;
 
   // ---- rendering -------------------------------------------------------- //
@@ -1283,6 +1386,12 @@ PAGE = r"""
     });
     $("bclear").addEventListener("click", function(){ post({ type: "control", action: "clear" }); });
 
+    // The camera is a toggle: the printer's MJPEG server holds a single client,
+    // so there is nothing to switch *to* while it is already running.
+    $("bcam").addEventListener("click", function(){
+      post({ type: state.camera ? "camera_off" : "camera_on" });
+    });
+
     $("poll").addEventListener("change", schedule);
   }
 
@@ -1337,6 +1446,24 @@ PAGE = r"""
           post({ type: "files" });
         }
         break;
+      case "camera":
+        state.camera = !!m.on;
+        $("bcam").textContent = state.camera ? "Stop camera" : "View camera";
+        $("camwrap").className = state.camera ? "" : "hidden";
+        $("camhint").textContent = state.camera
+          ? "Live. The printer serves one viewer at a time."
+          : "One viewer at a time — the printer stops the stream when you switch it off.";
+        $("camnote").textContent = state.camera ? "Starting the stream…" : "";
+        if (!state.camera) { $("camimg").removeAttribute("src"); }
+        break;
+      case "frame":
+        // Frames can still be in flight when the view is switched off, and a
+        // late one would repaint a panel the user just closed.
+        if (state.camera) {
+          $("camimg").src = m.image;
+          $("camnote").textContent = "";
+        }
+        break;
       case "log":
         showBanner(m.message, m.level === "error" ? "err" : "info");
         break;
@@ -1385,6 +1512,8 @@ class FlashForgePage(orca.pages.PagesPluginCapabilityBase):
                 "reprint": self._reprint,
                 "control": self._control,
                 "job_status": self._job_status,
+                "camera_on": self._camera_on,
+                "camera_off": self._camera_off,
             }.get(kind)
             if handler:
                 handler(msg)
@@ -1590,6 +1719,55 @@ class FlashForgePage(orca.pages.PagesPluginCapabilityBase):
         with RUNTIME.lock:
             job = dict(RUNTIME.job)
         self.post_message({"type": "job", **job})
+
+    # -- camera ------------------------------------------------------------- #
+
+    def _camera_on(self, _msg):
+        """Start the live view.
+
+        One stream at a time: the printer's MJPEG server holds a single client,
+        so switching the view on while it is already on would leave the first
+        reader holding the socket nobody can use.
+        """
+        self._stop_camera()
+        stop = threading.Event()
+        FlashForgePage._camera_stop = stop
+        self.post_message({"type": "camera", "on": True})
+        threading.Thread(target=self._camera_worker, args=(stop,),
+                         name="ffc5-camera", daemon=True).start()
+
+    def _camera_off(self, _msg):
+        self._stop_camera()
+        self.post_message({"type": "camera", "on": False})
+
+    def _stop_camera(self):
+        """Signal the current reader to stop. It closes the stream itself."""
+        stop = getattr(FlashForgePage, "_camera_stop", None)
+        if stop is not None:
+            stop.set()
+        FlashForgePage._camera_stop = None
+
+    def _camera_worker(self, stop):
+        client = RUNTIME.client()
+        try:
+            for frame in client.camera_frames(on_stop=stop.is_set):
+                if stop.is_set():
+                    return
+                self.post_message({
+                    "type": "frame",
+                    "image": "data:image/jpeg;base64,"
+                             + base64.b64encode(frame).decode("ascii"),
+                })
+        except PrinterError as exc:
+            self.post_message({"type": "error", "message": str(exc)})
+        except Exception as exc:
+            self.post_message({"type": "error",
+                               "message": f"{type(exc).__name__}: {exc}"})
+        finally:
+            # The page only un-dims the panel on a camera message, and a reader
+            # that stops is the only thing that knows the stream is gone.
+            if stop.is_set():
+                self.post_message({"type": "camera", "on": False})
 
 
 # --------------------------------------------------------------------------- #
