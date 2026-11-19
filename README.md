@@ -26,7 +26,7 @@ with no third-party dependencies — nothing is downloaded at plugin load time.
 | Capability | Type | What it does |
 |---|---|---|
 | **FlashForge C5** tab | `pages` | Live status, temperatures, the 4-slot material station, job progress, pause/resume/cancel, light and clear-platform, the files stored on the printer with one-click reprint, and a send-to-print panel with a per-tool spool picker. |
-| **Capture last slice** | `slicing-pipeline` | Remembers the G-code OrcaSlicer just exported, so the tab can send it with one click. |
+| **Capture last slice** | `slicing-pipeline` | Remembers the G-code OrcaSlicer just exported, so the tab can send it with one click. Attach it to the process preset via **Slicing Pipeline Plugin** (Advanced visibility). |
 | **FlashForge Creator 5** | `printer-connection` | Makes OrcaSlicer's own **Send to printer** / **Print** buttons work against the Creator 5, so the tab is optional for the ordinary slice-then-print flow. |
 
 ## Install
@@ -54,6 +54,14 @@ with no third-party dependencies — nothing is downloaded at plugin load time.
 
 4. Slice something and either send it from the tab or use OrcaSlicer's own
    **Print** button (see *Using OrcaSlicer's own buttons* below).
+
+5. Optional — one-click send of the slice you just made. **Send last OrcaSlicer
+   slice** only has something to send once the plugin's capture capability is
+   attached to your process preset: open **Process settings**, search for
+   **Slicing Pipeline Plugin**, and pick **Capture last slice** from the picker.
+   That setting is only visible when the process visibility is **Advanced** (or
+   Expert), which is why it is easy to conclude it does not exist. Without it,
+   pick a model file in the tab instead — that path always works.
 
 ## Using the tab
 

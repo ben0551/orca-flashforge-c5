@@ -627,6 +627,25 @@ def staged_tools(path):
     return tools
 
 
+def printer_name(name):
+    """The filename the printer ends up with, given an export name.
+
+    The printer is handed a file named after the path we upload, and a
+    `.gcode.3mf` bundle is unwrapped to its plain `.gcode` on the way. Showing
+    the user the bundle's name and sending the unwrapped one means the two
+    disagree, and a later reprint-by-name then fails on a file the user was
+    never told the name of. Both sides take the name from here.
+    """
+    stem = os.path.basename(name or "")
+    if stem.lower().endswith(".gcode.3mf"):
+        stem = stem[: -len(".3mf")]
+    elif stem:
+        stem = os.path.splitext(stem)[0]
+    if not stem.lower().endswith(".gcode"):
+        stem += ".gcode"
+    return stem
+
+
 def unwrap_for_printer(path, preferred_name=None):
     """Hand the printer a `.gcode`, never an OrcaSlicer `.gcode.3mf` bundle.
 
@@ -647,14 +666,7 @@ def unwrap_for_printer(path, preferred_name=None):
             if not candidates:
                 return path, None
             candidates.sort(key=lambda n: (0 if "plate_1" in n else 1, n))
-            stem = preferred_name or os.path.basename(path)
-            stem = os.path.basename(stem)
-            if stem.lower().endswith(".gcode.3mf"):
-                stem = stem[: -len(".3mf")]
-            else:
-                stem = os.path.splitext(stem)[0]
-            if not stem.lower().endswith(".gcode"):
-                stem += ".gcode"
+            stem = printer_name(preferred_name or os.path.basename(path))
             target = os.path.join(os.path.dirname(path), stem)
             with bundle.open(candidates[0]) as src, open(target, "wb") as dst:
                 while True:
@@ -872,6 +884,13 @@ PAGE = r"""
     <div class="row" style="margin-bottom:8px">
       <button id="blast">Send last OrcaSlicer slice</button>
       <span class="small dim" id="lastinfo">no slice captured yet</span>
+    </div>
+    <div class="small dim" id="lasthint" style="margin-bottom:9px">
+      To send the slice you just made without leaving OrcaSlicer, add <b>Capture last slice</b>
+      to your process preset: <b>Process settings</b>, search for
+      <b>Slicing Pipeline Plugin</b>, and pick it. That setting is hidden unless the process
+      visibility is <b>Advanced</b>. Otherwise, choose a Model file below, or reprint one from
+      Files on the printer.
     </div>
     <div class="grid2">
       <label class="chk" for="bfile">Model file</label>
@@ -1304,6 +1323,9 @@ PAGE = r"""
         $("lastinfo").textContent = m.last_slice
           ? ("last slice: " + m.last_slice + " — ready to send")
           : "no slice captured yet";
+        // The how-to is long, and a banner cannot hold it or stay put. Show it in
+        // the card for as long as the button would refuse the click.
+        $("lasthint").style.display = m.last_slice ? "none" : "block";
         $("stt").textContent = (m.status && m.status.status) || "unknown";
         showSetupBanner(!!m.needs_setup);
         break;
@@ -1531,21 +1553,23 @@ class FlashForgePage(orca.pages.PagesPluginCapabilityBase):
         path = LAST_SLICE.get("path")
         if not path or not os.path.exists(path):
             self.post_message({"type": "error",
-                               "message": "No OrcaSlicer slice captured yet. Enable "
-                                          "'Capture last slice' in the process preset, "
-                                          "or pick a file above."})
+                               "message": "Nothing captured yet — add 'Capture last slice' "
+                                          "to the process preset (search for 'Slicing "
+                                          "Pipeline Plugin'), or choose a Model file below."})
             return
         ensure_spools()
         tools = staged_tools(path)
         spools = (RUNTIME.status or {}).get("spools") or []
         for tool in tools:
             tool["suggested"] = nearest_slot(spools, tool.get("color"))
-        RUNTIME.stage = {"path": path, "name": os.path.basename(path), "size": 0,
+        # Stage under the name the state advertised, so what the user was told
+        # is ready to send is what the printer is asked for.
+        name = LAST_SLICE.get("name") or os.path.basename(path)
+        RUNTIME.stage = {"path": path, "name": name, "size": 0,
                          "handle": None, "received": 0, "tools": tools}
-        self.post_message({"type": "staged", "name": os.path.basename(path),
-                           "tools": tools})
+        self.post_message({"type": "staged", "name": name, "tools": tools})
         self.post_message({"type": "log",
-                           "message": f"Last slice {os.path.basename(path)} staged — "
+                           "message": f"Last slice {name} staged — "
                                       f"check the spool mapping, then Send & print."})
 
     def _reprint(self, msg):
@@ -1690,10 +1714,11 @@ def mappings_for(client, tools, chosen):
 class LastSliceCapture(orca.slicing.SlicingPipelineCapabilityBase):
     """Remember the G-code OrcaSlicer just exported.
 
-    Needs enabling per process preset: add it under ``post_process_plugin``
-    (Plugin Development -> 'plugin references in presets'). Reading the file is
-    allowed at this step because the export folder is a pre-approved root for the
-    duration of the call, so no permission prompt appears.
+    Needs enabling per process preset: add it to the ``slicing_pipeline_plugin``
+    setting (Process settings -> search "Slicing Pipeline Plugin", Advanced
+    visibility). Reading the file is allowed at this step because the export
+    folder is a pre-approved root for the duration of the call, so no permission
+    prompt appears.
     """
 
     def get_name(self):
@@ -1707,7 +1732,8 @@ class LastSliceCapture(orca.slicing.SlicingPipelineCapabilityBase):
             if path and os.path.exists(path):
                 LAST_SLICE["path"] = path
                 LAST_SLICE["when"] = time.time()
-                LAST_SLICE["name"] = getattr(ctx, "output_name", None) or os.path.basename(path)
+                LAST_SLICE["name"] = printer_name(
+                    getattr(ctx, "output_name", None) or os.path.basename(path))
             return orca.ExecutionResult.success("Captured for the FlashForge C5 tab")
         except Exception as exc:
             return orca.ExecutionResult.failure(

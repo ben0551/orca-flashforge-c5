@@ -398,6 +398,123 @@ def main():
                   agent.send_message(host, "{}", 0, False) == -7010)
 
             # ---------------------------------------------------------------
+            print("\nCapturing the last slice")
+            capture = plugin.LastSliceCapture()
+            check("the capability is named for what it does",
+                  capture.get_name() == "Capture last slice")
+            check("it registers as a slicing-pipeline capability",
+                  capture.get_type().value == "slicing-pipeline",
+                  str(capture.get_type()))
+
+            # Nothing captured: the tab has to name where the setting actually
+            # is. The user cannot be expected to browse for it, and a plausible
+            # but invented setting name is worse than no name at all.
+            plugin.LAST_SLICE.update({"path": None, "when": 0.0, "name": ""})
+            nudge = Tab(page)
+            nudge.send({"type": "send_last"})
+            refusal = nudge.latest("error")
+            check("sending with nothing captured is refused, not crashed",
+                  refusal is not None, str(refusal))
+            check("the refusal names the setting OrcaSlicer actually has",
+                  refusal is not None
+                  and "Slicing Pipeline Plugin" in refusal["message"]
+                  and "post_process_plugin" not in refusal["message"],
+                  str(refusal and refusal["message"]))
+            check("the refusal points at the fallback that always works",
+                  refusal is not None and "Model file" in refusal["message"],
+                  str(refusal and refusal["message"]))
+
+            # The markup carries the same instruction, so the user meets it
+            # before they press the button rather than after.
+            ui = page.get_ui()
+            check("the send card carries the how-to",
+                  "Slicing Pipeline Plugin" in ui
+                  and "Capture last slice" in ui)
+            source = open(os.path.join(workdir, "flashforge-c5_any.py"),
+                          encoding="utf-8").read()
+            check("the invented setting name appears nowhere in the plugin",
+                  "post_process_plugin" not in source and "post_process_plugin" not in ui)
+
+            # A capture whose file has since gone must not be offered.
+            plugin.LAST_SLICE["path"] = os.path.join(workdir, "vanished.gcode")
+            stale = Tab(page)
+            stale.send({"type": "send_last"})
+            check("a captured path that no longer exists is refused",
+                  stale.latest("error") is not None)
+
+            # The name shown must be the name the printer ends up with: a
+            # .gcode.3mf is unwrapped before upload, so advertising the bundle
+            # name would be a lie and a reprint-by-name would fail on it.
+            check("an export name and the printer's name are reconciled",
+                  plugin.printer_name("model.gcode.3mf") == "model.gcode"
+                  and plugin.printer_name("widget.3mf") == "widget.gcode"
+                  and plugin.printer_name("plain.gcode") == "plain.gcode"
+                  and plugin.printer_name("noextension") == "noextension.gcode",
+                  plugin.printer_name("model.gcode.3mf"))
+
+            # Capture happens only at the export seam; earlier steps are no-ops.
+            plugin.LAST_SLICE.update({"path": None, "when": 0.0, "name": ""})
+            slice_path = build_3mf(os.path.join(workdir, "last.gcode.3mf"))
+            early = capture.execute(fake_orca.SlicingPipelineContext(
+                step=fake_orca.Step.posSlice, gcode_path=slice_path))
+            check("an earlier pipeline step captures nothing",
+                  early.status == fake_orca.PluginResult.Success
+                  and plugin.LAST_SLICE["path"] is None,
+                  str(plugin.LAST_SLICE))
+            done = capture.execute(fake_orca.SlicingPipelineContext(
+                step=fake_orca.Step.psGCodePostProcess, gcode_path=slice_path,
+                output_name="widget.gcode.3mf"))
+            check("the export seam captures the file at the printer-visible name",
+                  done.status == fake_orca.PluginResult.Success
+                  and plugin.LAST_SLICE["path"] == slice_path
+                  and plugin.LAST_SLICE["name"] == "widget.gcode",
+                  str(plugin.LAST_SLICE))
+            check("the capture reports itself back to OrcaSlicer",
+                  "FlashForge C5" in (done.message or ""), str(done.message))
+
+            ready = Tab(page)
+            ready.send({"type": "send_last"})
+            staged_last = ready.latest("staged")
+            check("a captured slice is staged for sending",
+                  staged_last is not None
+                  and staged_last["name"] == "widget.gcode",
+                  str(staged_last)[:160])
+            check("its tools carry a spool suggestion",
+                  staged_last is not None
+                  and len(staged_last["tools"]) == 2
+                  and all(t.get("suggested") for t in staged_last["tools"]),
+                  str(staged_last and staged_last["tools"]))
+            ready.send({"type": "status"})
+            check("the state advertises the captured slice to the page",
+                  ready.latest("state").get("last_slice") == "widget.gcode",
+                  str(ready.latest("state"))[:160])
+
+            # End to end: the tab promised one name, so the printer must be
+            # handed that name and not the staging file's.
+            before = len(printer.uploads)
+            ready.send({"type": "commit", "print": False, "leveling": True,
+                        "mappings": [{"tool": 1, "slot": 2}, {"tool": 2, "slot": 3}]})
+            wait_for_job(ready)
+            check("the printer receives the name the tab advertised",
+                  len(printer.uploads) > before
+                  and printer.uploads[-1]["filename"] == "widget.gcode",
+                  printer.uploads[-1]["filename"]
+                  if len(printer.uploads) > before else "nothing was uploaded")
+            check("it was the unwrapped G-code, not the bundle",
+                  len(printer.uploads) > before
+                  and printer.uploads[-1]["bytes"] == PLATE_GCODE)
+
+            # A capture that fails must not take OrcaSlicer's export down with
+            # it: this runs inside the export the user is waiting on.
+            gone = capture.execute(fake_orca.SlicingPipelineContext(
+                step=fake_orca.Step.psGCodePostProcess,
+                gcode_path=os.path.join(workdir, "no-such-file.gcode")))
+            check("a missing export file is a no-op, not an export failure",
+                  gone.status == fake_orca.PluginResult.Success, str(gone.status))
+
+            plugin.LAST_SLICE.update({"path": None, "when": 0.0, "name": ""})
+
+            # ---------------------------------------------------------------
             print("\nOffline behaviour")
             printer_down = plugin.Runtime()
             saved = plugin.load_settings()

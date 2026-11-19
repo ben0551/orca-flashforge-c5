@@ -66,6 +66,7 @@ function makeEl(id) {
 const IDS = ["banner", "pname", "pip", "pfw", "dot", "stt", "jfile", "barfill",
   "jpct", "jlay", "jel", "jrem", "nozzles", "tbed", "tch", "tdoor", "tdisk",
   "spools", "mapwrap", "tools", "bsend", "bsendprint", "blast", "lastinfo",
+  "lasthint",
   "bfile", "finfo", "clevel", "upwrap", "upbar", "uplabel", "files", "host",
   "port", "serial", "code", "poll", "bsave", "cfginfo", "bpause", "bresume",
   "bcancel", "blight", "bclear", "setup"];
@@ -434,6 +435,19 @@ must("a configured tab clears the setup banner", () => {
   deliver({ type: "state", status: STATES.idle, last_slice: null, needs_setup: false });
   assert(byId["banner"].style.display === "none",
          "the setup banner outlived the setup: " + byId["banner"].style.display);
+});
+
+must("the capture how-to is shown while there is no slice to send", () => {
+  deliver({ type: "state", status: STATES.idle, last_slice: null, needs_setup: false });
+  assert(byId["lasthint"].style.display === "block",
+         "the how-to is hidden with no slice captured");
+  deliver({ type: "state", status: STATES.idle, last_slice: "widget.gcode",
+            needs_setup: false });
+  assert(byId["lasthint"].style.display === "none",
+         "the how-to still shows once a slice is captured");
+  deliver({ type: "state", status: STATES.idle, last_slice: null, needs_setup: false });
+  assert(byId["lasthint"].style.display === "block",
+         "the how-to did not come back when the slice went away");
 });
 
 check("no null-element lookups fired during the run", errors.length === 0,
