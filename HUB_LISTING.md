@@ -57,7 +57,7 @@ page.
 
 ### `flashforge-c5` → listing 1
 
-**Name:** FlashForge C5
+**Name:** FlashForge Creator 5 Device Tab
 
 **Types:** two capabilities — Pages and Printer Connection. See
 *Capability types and the hub* below: a plugin is not listed under one type.

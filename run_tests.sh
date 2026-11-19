@@ -4,7 +4,7 @@ set -uo pipefail
 cd "$(dirname "$0")"
 
 status=0
-echo "=== FlashForge C5 device plugin (python) ==="
+echo "=== FlashForge Creator 5 Device Tab (python) ==="
 python3 tests/test_plugin.py || status=1
 
 echo

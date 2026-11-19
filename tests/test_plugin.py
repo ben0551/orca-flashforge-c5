@@ -152,6 +152,33 @@ def main():
                       package.requested_permissions.get("network_http", [])),
                   str(package.requested_permissions))
 
+            # A canonical scheme://host grant is host-wide; anything else is kept
+            # as a legacy grant scoped to that exact string. So an entry carrying
+            # a port normalizes to something it no longer equals, matches nothing
+            # at all, and silently leaves every call prompting — which is how the
+            # camera ended up raising PermissionError while the API, approved one
+            # URL at a time, kept working.
+            def canonical(url):
+                """What the audit hook normalizes an entry to: scheme://host."""
+                scheme, sep, rest = url.partition("://")
+                if not sep:
+                    return url
+                for char in "/?#":
+                    rest = rest.split(char, 1)[0]
+                authority = rest.split("@")[-1]
+                if authority.startswith("["):
+                    host_part = authority.split("]")[0] + "]"
+                else:
+                    host_part = authority.split(":")[0]
+                return f"{scheme.lower()}://{host_part.lower()}"
+
+            hosts = package.requested_permissions.get("network_http", [])
+            offenders = [u for u in hosts if canonical(u) != u]
+            check("every declared host is canonical, and so actually matches",
+                  bool(hosts) and not offenders, str(offenders or hosts))
+            check("one canonical entry covers the API port and the camera port",
+                  hosts == [f"http://{host}"], str(hosts))
+
             # ---------------------------------------------------------------
             print("\nConnection and status")
             page = plugin.FlashForgePage()
@@ -168,7 +195,14 @@ def main():
                   tab.latest("files") is not None)
 
             check("the tab exposes its HTML", "<div id=\"wrap\">" in page.get_ui())
-            check("the tab is named FlashForge C5", page.get_name() == "FlashForge C5")
+            check("the tab keeps its short name", page.get_name() == "FlashForge C5")
+            # The marketplace name is longer and descriptive; the tab is what the
+            # user reads while working, so the two are deliberately different.
+            plugin_text = open(os.path.join(workdir, "flashforge-c5_any.py"),
+                               encoding="utf-8").read()
+            check("the marketplace name is the descriptive one",
+                  '# name = "FlashForge Creator 5 Device Tab"' in plugin_text
+                  and '# name = "FlashForge C5"' not in plugin_text)
 
             # Idle firmware pads the job block with uninitialised memory; the
             # normaliser must not pass that through.
@@ -348,6 +382,17 @@ def main():
             junk = iter([b"not a jpeg at all"])
             check("a stream with no JPEG in it yields nothing",
                   list(plugin.mjpeg_frames(lambda n: next(junk, b""))) == [])
+
+            # The raw refusal names a Python audit event, which tells a user
+            # nothing about what to do.
+            fancy = plugin.permission_hint(PermissionError(
+                'Plugin attempted audited operation "urllib.Request" '
+                "without permission: audit permission required"))
+            check("a permission refusal is explained, not just echoed",
+                  "Reinstall the plugin" in fancy and "restart OrcaSlicer" in fancy,
+                  fancy)
+            check("an ordinary error still names its type",
+                  plugin.permission_hint(ValueError("bad")) == "ValueError: bad")
 
             saved_cam = (plugin.DEFAULT_CAM_PORT, plugin.CAM_WARMUP_S, plugin.CAM_RETRY_S)
             # The real warm-up is seconds; the double answers at once.

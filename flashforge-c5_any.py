@@ -1,4 +1,4 @@
-"""FlashForge C5 — an OrcaSlicer plugin for the FlashForge Creator 5 / 5 Pro.
+"""FlashForge Creator 5 Device Tab — an OrcaSlicer plugin for the Creator 5 / 5 Pro.
 
 What it does
 ------------
@@ -12,8 +12,10 @@ agent so OrcaSlicer's own Send / Print buttons work too.
 Two capabilities, registered by one plugin:
 
 * ``FlashForge C5`` tab (Pages) - live status, temperatures, material station,
-  job control, and a file browser for what is already on the printer, with
-  reprint.
+  camera, job control, and a file browser for what is already on the printer,
+  with reprint. The *plugin* is named FlashForge Creator 5 Device Tab for the
+  marketplace; the tab keeps the shorter name, which is what the user is looking
+  at when they read it.
 * ``FlashForge Creator 5`` (PrinterAgent) - makes OrcaSlicer's native Send to
   printer / Print buttons work against the Creator 5, so printing stays the
   ordinary OrcaSlicer flow and the tab is there to watch and drive the machine.
@@ -32,10 +34,10 @@ Author: Ben Fischer.  License: MIT.
 # dependencies = []
 #
 # [tool.orcaslicer.plugin]
-# name = "FlashForge C5"
-# description = "Send prints to a FlashForge Creator 5 / 5 Pro over LAN and watch the job inside OrcaSlicer."
+# name = "FlashForge Creator 5 Device Tab"
+# description = "Send prints to a FlashForge Creator 5 / 5 Pro over LAN, watch the job and the camera inside OrcaSlicer."
 # author = "Ben Fischer"
-# version = "1.3.0"
+# version = "1.3.1"
 # ///
 
 import base64
@@ -286,6 +288,21 @@ def preset_connection():
 
 class PrinterError(Exception):
     """Any failure talking to the printer, with a human-readable message."""
+
+
+def permission_hint(exc):
+    """Turn a plugin audit refusal into something the user can act on.
+
+    The raw text names a Python audit event and a matching rule the user has no
+    way to see, which tells them nothing about what to do next.
+    """
+    text = str(exc)
+    if isinstance(exc, PermissionError) or "without permission" in text:
+        return ("OrcaSlicer refused this on a permission check, so the plugin "
+                "could not reach the printer. Reinstall the plugin and accept "
+                "its network permission, or restart OrcaSlicer so the plugin "
+                f"asks again. ({text})")
+    return f"{type(exc).__name__}: {text}"
 
 
 def _reachable(host, port, timeout=0.6):
@@ -1521,7 +1538,7 @@ class FlashForgePage(orca.pages.PagesPluginCapabilityBase):
             self.post_message({"type": "error", "message": str(exc)})
         except Exception as exc:            # never let the tab die on a bug
             self.post_message({"type": "log", "level": "error",
-                               "message": f"{type(exc).__name__}: {exc}"})
+                               "message": permission_hint(exc)})
 
     # -- handlers ----------------------------------------------------------- #
 
@@ -1761,8 +1778,7 @@ class FlashForgePage(orca.pages.PagesPluginCapabilityBase):
         except PrinterError as exc:
             self.post_message({"type": "error", "message": str(exc)})
         except Exception as exc:
-            self.post_message({"type": "error",
-                               "message": f"{type(exc).__name__}: {exc}"})
+            self.post_message({"type": "error", "message": permission_hint(exc)})
         finally:
             # The page only un-dims the panel on a camera message, and a reader
             # that stops is the only thing that knows the stream is gone.
@@ -2115,8 +2131,22 @@ class FlashForgeC5Plugin(orca.base):
         cfg = load_settings()
         declared = []
         if cfg.get("host"):
-            declared.append(f"http://{cfg['host']}:{cfg.get('port') or DEFAULT_API_PORT}")
-            declared.append(f"http://{cfg['host']}:{DEFAULT_CAM_PORT}")
+            # The bare host, with no port — and that is not cosmetic.
+            #
+            # Matching normalizes an entry to ``scheme://host`` (dropping userinfo
+            # and port) and then only accepts it as host-wide when it *already*
+            # equals its normalized form. So ``http://host:8898`` is
+            # non-canonical, normalizes to ``http://host``, fails that comparison,
+            # and is treated as a legacy grant scoped to that exact string — which
+            # no request ever has. It therefore authorized **nothing**, leaving
+            # every call to fall through to an interactive prompt: the API
+            # endpoints worked on approvals given one URL at a time, and the
+            # camera's URL had never been approved.
+            #
+            # One canonical entry covers every port, path and query on the host,
+            # which is why the camera and the port-8898 API need no separate
+            # entries.
+            declared.append(f"http://{cfg['host']}")
         try:
             orca.request_permissions(
                 network_http=declared,

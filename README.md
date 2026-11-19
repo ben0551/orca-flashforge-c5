@@ -16,10 +16,14 @@ Each is one Python file in the standard OrcaSlicer plugin format
 ([plugin docs](https://www.orcaslicer.com/wiki/developer_reference/plugin_development/plugin_development.html)),
 with no third-party dependencies — nothing is downloaded at plugin load time.
 
-| Plugin file | Adds | Tab |
-|---|---|---|
-| `flashforge-c5_any.py` | a device tab and a printer agent | **FlashForge C5** |
-| `makerworld-c5_any.py` | a converter tab | **MakerWorld** |
+| Plugin file | Listing name | Adds | Tab |
+|---|---|---|---|
+| `flashforge-c5_any.py` | **FlashForge Creator 5 Device Tab** | a device tab and a printer agent | **FlashForge C5** |
+| `makerworld-c5_any.py` | **MakerWorld C5** | a converter tab | **MakerWorld** |
+
+The listing name and the tab name differ on purpose: the hub list is where a
+stranger has to work out what the plugin does, so it says so; the tab is what you
+read while working, so it stays short.
 
 ## Requirements
 
