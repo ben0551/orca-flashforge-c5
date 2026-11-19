@@ -6,7 +6,7 @@
  * the message handling, the rendering and the button wiring can be checked
  * without a slicer.
  *
- *   node tests/makerworld_harness.js <page.js>
+ *   node tests/converter_harness.js <page.js>
  */
 "use strict";
 const fs = require("fs");
@@ -481,6 +481,52 @@ must("a finished conversion refreshes the list", () => {
               kept_examples: [], plates: [], filaments: [], gcode: [], warnings: [] } });
   assert(sent.some(m => m.type === "list_files"),
          "the list was not refreshed: " + JSON.stringify(sent));
+});
+
+console.log("\nThe token settings stay out of the way");
+must("there is a token panel to open", () => {
+  assert(byId["tokenPanel"], "there is no token panel");
+});
+must("being told a token is needed opens it, and says why", () => {
+  byId["tokenPanel"].open = false;
+  deliver({ type: "need_token", message: "A BambuCloud token is needed to download." });
+  assert(byId["tokenPanel"].open, "the panel stayed closed");
+  assert(byId["banner"].className === "err", "the reason was not shown");
+  assert(byId["banner"].textContent.indexOf("token") >= 0,
+         "the banner does not mention a token: " + byId["banner"].textContent);
+});
+must("a saved token opens it too, so the confirmation is visible", () => {
+  byId["tokenPanel"].open = false;
+  byId["token"].placeholder = "";
+  deliver({ type: "state", token_set: true, printer: "P" });
+  assert(byId["tokenPanel"].open, "the panel stayed closed");
+  assert(byId["token"].placeholder === "(saved)", "not shown as saved");
+});
+must("no token means it is left closed", () => {
+  byId["tokenPanel"].open = false;
+  deliver({ type: "state", token_set: false, printer: "P" });
+  assert(!byId["tokenPanel"].open, "it opened with nothing saved");
+});
+
+console.log("\nA typed path");
+must("Enter converts the path, so the button is an alternative", () => {
+  sent.length = 0;
+  byId["path"].value = "/tmp/project.3mf";
+  let prevented = false;
+  byId["path"].dispatch("keydown", { key: "Enter", preventDefault: () => { prevented = true; } });
+  const msg = sent.filter(m => m.type === "convert_path")[0];
+  assert(msg && msg.path === "/tmp/project.3mf", "posted: " + JSON.stringify(sent));
+  assert(prevented, "the keypress was allowed to do whatever it would have done");
+});
+must("any other key in the path box does nothing", () => {
+  sent.length = 0;
+  byId["path"].dispatch("keydown", { key: "a", preventDefault: () => {} });
+  assert(sent.length === 0, "posted: " + JSON.stringify(sent));
+});
+must("the button still converts the path", () => {
+  sent.length = 0;
+  byId["convertPath"].dispatch("click");
+  assert(sent.some(m => m.type === "convert_path"), "the button stopped working");
 });
 
 check("no null-element lookups fired during the run", errors.length === 0,

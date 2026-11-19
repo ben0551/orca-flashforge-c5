@@ -19,7 +19,7 @@ with no third-party dependencies — nothing is downloaded at plugin load time.
 | Plugin file | Listing name | Adds | Tab |
 |---|---|---|---|
 | `flashforge-c5_any.py` | **FlashForge Creator 5 Device Tab** | a device tab and a printer agent | **FlashForge C5** |
-| `makerworld-c5_any.py` | **3mf Converter** | a converter tab | **3mf Converter** |
+| `3mf-converter_any.py` | **3mf Converter** | a converter tab | **3mf Converter** |
 
 The listing name and the tab name differ on purpose: the hub list is where a
 stranger has to work out what the plugin does, so it says so; the tab is what you
@@ -34,7 +34,7 @@ read while working, so it stays short.
   Network for the check code). **If you have already set this printer up in
   OrcaSlicer, you do not need to type any of it** — see *Reading OrcaSlicer's own
   printer settings* below.
-- For `makerworld-c5` only, and only when you use a link rather than a file you
+- For `3mf-converter` only, and only when you use a link rather than a file you
   already have: a **BambuCloud token**. See *The 3mf Converter tab* below.
 
 ## What you get
@@ -46,7 +46,7 @@ read while working, so it stays short.
 | **FlashForge C5** tab | `pages` | Live status, temperatures, the 4-slot material station, a **live camera view**, job progress, pause/resume/cancel, light and clear-platform, and the files stored on the printer with a plate **preview** and one-click **reprint**. |
 | **FlashForge Creator 5** | `printer-connection` | Makes OrcaSlicer's own **Send to printer** / **Print** buttons work against the Creator 5. This is the sending path — the tab watches and drives the machine. |
 
-**`makerworld-c5`** — models from MakerWorld.
+**`3mf-converter`** — models from MakerWorld.
 
 | Capability | Type | What it does |
 |---|---|---|
@@ -58,11 +58,11 @@ Install the plugin you want, or both. Each is independent, and each goes in its
 own folder.
 
 1. Open **Plugins** in OrcaSlicer, then **Browse plugins ▾ → Install local
-   plugin**, and pick `flashforge-c5_any.py` and/or `makerworld-c5_any.py`.
+   plugin**, and pick `flashforge-c5_any.py` and/or `3mf-converter_any.py`.
 
    Or copy each file into its own folder under the OrcaSlicer data directory, e.g.
    `%APPDATA%\OrcaSlicer\orca_plugins\flashforge-c5\flashforge-c5_any.py` and
-   `%APPDATA%\OrcaSlicer\orca_plugins\makerworld-c5\makerworld-c5_any.py`. A
+   `%APPDATA%\OrcaSlicer\orca_plugins\3mf-converter\3mf-converter_any.py`. A
    plugin folder must contain exactly one entry file (one `.py` or one `.whl`), so
    **the two files must not share a folder** — one folder holding both will load
    neither.
@@ -133,12 +133,17 @@ OrcaSlicer. Paste a link and pick a plate, and it downloads the plate, converts 
 and opens the result in the running OrcaSlicer ready to slice.
 
 **A `.3mf` you already have is easier still — drop it onto the tab**, or use the
-file chooser next to the drop zone; no token is involved. Reading it this way also
-skips the filesystem peek a typed path needs. The path box is still there for a
-file somewhere you would rather not navigate to.
+file chooser in the drop zone; no token is involved. Both convert on their own, with
+no button to press. The path box underneath is the fallback, for a file somewhere you
+would rather not navigate to: **Enter** converts there, and the button does the same
+thing, because a typed path is the one route with no moment that says "that is the
+whole path" — a drop ends when the file lands, a picker when the dialog closes.
 
 **Getting a token, if you pull a link.** It is the same BambuCloud token Bambu
-Studio uses, and it is a one-off:
+Studio uses, and it is a one-off. The field is **collapsed under "Token settings"**
+until you need it, and it opens by itself if you ask for a link without one — most of
+what this plugin does needs no token, and a credentials box sitting open reads as a
+requirement. The steps:
 
 1. Sign in at `makerworld.com` in a browser.
 2. Press **F12** for Developer Tools.
@@ -304,7 +309,7 @@ independently, and the release tag says which one is being published:
 | Plugin | Workflow | Release tag | Version published |
 |---|---|---|---|
 | `flashforge-c5` | `.github/workflows/publish-flashforge-c5.yml` | `flashforge-v1.2.0` | `1.2.0` |
-| `makerworld-c5` | `.github/workflows/publish-makerworld-c5.yml` | `makerworld-v1.0.0` | `1.0.0` |
+| `3mf-converter` | `.github/workflows/publish-3mf-converter.yml` | `3mf-v1.3.0` | `1.3.0` |
 
 Each workflow ignores a tag that is not its own, so tagging one plugin never
 republishes the other. Each plugin needs its **own** portal listing and its own
@@ -318,7 +323,7 @@ connection; the plugin `name` in its metadata — `FlashForge Creator 5 Device T
 ```
 
 Three suites, none needing OrcaSlicer or a printer. Two cover `flashforge-c5`,
-one covers `makerworld-c5`:
+one covers `3mf-converter`:
 
 - `tests/test_plugin.py` runs the real `flashforge-c5` plugin against a mock Creator 5
   (`tests/mock_printer.py`) and a stub `orca` module (`tests/fake_orca.py`), then
@@ -326,7 +331,7 @@ one covers `makerworld-c5`:
   asserts on what the *printer* received — header casing, the `gcodeFile` part,
   the `fileSize` header, the extracted G-code bytes, the five-field mapping
   elements — not on what the plugin thinks it sent.
-- `tests/test_makerworld.py` runs the real `3mf Converter` plugin end to end: the URL
+- `tests/test_converter.py` runs the real `3mf Converter` plugin end to end: the URL
   parsing, the download (against a stubbed transport, asserting the instance
   endpoint and the bearer header), the conversion, the saved file and the hand-off
   payload. The conversion is asserted key by key — that the designer's layer

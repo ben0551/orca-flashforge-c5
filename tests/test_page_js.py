@@ -2,7 +2,7 @@
 
 Extracts a page from the plugin that ships it, feeds it that plugin's own
 normalised payloads, and runs the matching node harness. The device tab comes
-from flashforge-c5_any.py, the MakerWorld tab from makerworld-c5_any.py.
+from flashforge-c5_any.py, the MakerWorld tab from 3mf-converter_any.py.
 
     python3 tests/test_page_js.py
 """
@@ -40,6 +40,17 @@ def page_ids(page):
     return sorted(set(re.findall(r'id="([A-Za-z0-9_-]+)"', page)))
 
 
+def token_panel_starts_closed(page):
+    """The token settings must be a <details> that does not start open.
+
+    A credentials field sitting open reads as a requirement, and most of what this
+    plugin does needs no token at all. The harness cannot check this after the
+    fact, because delivering any state message legitimately opens the panel.
+    """
+    match = re.search(r'<details[^>]*id="tokenPanel"[^>]*>', page)
+    return bool(match) and " open" not in match.group(0)
+
+
 def missing_elements(page, js):
     """Ids the script looks up that the markup never defines.
 
@@ -52,7 +63,7 @@ def missing_elements(page, js):
     return sorted(looked_up - set(page_ids(page)))
 
 
-def extract_makerworld_page(source_path):
+def extract_converter_page(source_path):
     """The second tab, which is a plain (non-raw) string."""
     text = open(source_path, encoding="utf-8").read()
     match = re.search(r'^MAKERWORLD_PAGE = """(.*?)^"""$', text, re.S | re.M)
@@ -64,13 +75,13 @@ def extract_makerworld_page(source_path):
     return page, page[start:end]
 
 
-def run_makerworld_checks(source, work):
+def run_converter_checks(source, work):
     """Static checks plus the node harness for the MakerWorld tab."""
-    page, js = extract_makerworld_page(source)
-    js_path = os.path.join(work, "makerworld.js")
+    page, js = extract_converter_page(source)
+    js_path = os.path.join(work, "converter.js")
     with open(js_path, "w", encoding="utf-8") as fh:
         fh.write(js)
-    ids_path = os.path.join(work, "makerworld-ids.json")
+    ids_path = os.path.join(work, "converter-ids.json")
     with open(ids_path, "w", encoding="utf-8") as fh:
         json.dump(page_ids(page), fh)
 
@@ -94,6 +105,8 @@ def run_makerworld_checks(source, work):
          'post({ type: "hello" })' in js),
         ("every element the script looks up is defined in the markup",
          not missing_elements(page, js), str(missing_elements(page, js))),
+        ("the token settings sit behind a disclosure that starts closed",
+         token_panel_starts_closed(page)),
         ("the token panel explains how to get a token",
          "How do I get a BambuCloud token?" in page
          and "F12" in page and "Cookies" in page
@@ -111,7 +124,7 @@ def run_makerworld_checks(source, work):
         print(f"  [{'PASS' if ok else 'FAIL'}] {name}" + (f" — {detail}" if detail else ""))
         failed += 0 if ok else 1
 
-    result = subprocess.run(["node", os.path.join(HERE, "makerworld_harness.js"),
+    result = subprocess.run(["node", os.path.join(HERE, "converter_harness.js"),
                              js_path, ids_path],
                             capture_output=True, text=True)
     print(result.stdout)
@@ -127,7 +140,7 @@ def main():
         return 0
 
     device_source = os.path.join(ROOT, "flashforge-c5_any.py")
-    makerworld_source = os.path.join(ROOT, "makerworld-c5_any.py")
+    converter_source = os.path.join(ROOT, "3mf-converter_any.py")
     source = device_source
     page, js = extract_page(source)
 
@@ -199,7 +212,7 @@ def main():
         failed += 0 if result.returncode == 0 else 1
 
         print()
-        failed += run_makerworld_checks(makerworld_source, work)
+        failed += run_converter_checks(converter_source, work)
         return 1 if failed else 0
     finally:
         shutil.rmtree(work, ignore_errors=True)

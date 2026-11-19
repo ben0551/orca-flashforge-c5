@@ -31,7 +31,7 @@ Author: Ben Fischer.  License: MIT.
 # name = "3mf Converter"
 # description = "Rebuild a MakerWorld link or any local .3mf for the printer selected in OrcaSlicer."
 # author = "Ben Fischer"
-# version = "1.2.0"
+# version = "1.3.0"
 # ///
 
 import base64
@@ -248,7 +248,17 @@ IDENTITY_KEYS = ("printer_settings_id", "print_settings_id", "filament_settings_
 
 
 class MakerWorldError(Exception):
-    """Anything the MakerWorld tab should show the user verbatim."""
+    """Anything the converter tab should show the user verbatim."""
+
+
+class TokenNeeded(MakerWorldError):
+    """A link was asked for without a token.
+
+    Its own type so the page can *open* its token settings rather than only
+    printing the message: the user has to go somewhere to fix this, and saying so
+    without taking them there is the difference between a helpful error and a
+    dead end.
+    """
 
 
 def parse_makerworld_url(url):
@@ -305,8 +315,9 @@ def design_plates(details):
 def fetch_instance_3mf(instance_id, token):
     """Download one plate's .3mf. Returns (bytes, filename)."""
     if not token:
-        raise MakerWorldError("A BambuCloud token is needed to download from "
-                              "MakerWorld. Paste one in the panel above.")
+        raise TokenNeeded("A BambuCloud token is needed to download from "
+                          "MakerWorld. Open Token settings under the link box "
+                          "and paste one in.")
     body = _http_get(MW_INSTANCE_API.format(instance=instance_id),
                      headers={"Authorization": "Bearer " + token})
     try:
@@ -885,19 +896,28 @@ MAKERWORLD_PAGE = """
 </style>
 
 <h2>3mf Converter</h2>
-<p class="note">Paste a MakerWorld link, or hand over a <code>.3mf</code> you already
-have &mdash; drop it below, or point at one on disk. The project is rebuilt for the
-printer selected in OrcaSlicer: the designer's layers, walls, infill, supports and
-temperatures are kept, their machine is replaced. It then opens here, ready to slice.</p>
+<p class="note">Drop a <code>.3mf</code> on this tab and it is rebuilt for the printer
+selected in OrcaSlicer: the designer's layers, walls, infill, supports and temperatures
+are kept, their machine is replaced. It then opens here, ready to slice. A MakerWorld
+link works too &mdash; that path needs a token, a local file never does.</p>
 
-<div class="panel">
-  <div class="row"><label for="token" style="margin:0">BambuCloud token</label></div>
-  <div class="row">
-    <input id="token" type="password" placeholder="only needed to download from MakerWorld">
+<label for="url">MakerWorld link</label>
+<div class="row">
+  <input id="url" type="text" placeholder="https://makerworld.com/en/models/...">
+  <button id="resolve" class="primary">Find plates</button>
+</div>
+
+<!-- Closed by default: most of what this plugin does needs no token at all, and
+     a credentials field sitting open reads as a requirement. -->
+<details class="panel" id="tokenPanel">
+  <summary>Token settings <span class="meta">&mdash; only needed to download from a
+    link, never for a file you already have</span></summary>
+  <div class="row" style="margin-top:8px">
+    <input id="token" type="password" placeholder="no token set">
     <button id="saveToken">Save token</button>
   </div>
-  <p class="note" style="margin:0">Kept in this plugin's settings.json and sent to
-  MakerWorld and nowhere else. Converting a local <code>.3mf</code> needs no token.</p>
+  <p class="note" style="margin:0">Kept in this plugin's settings.json (mode 0600) and
+  sent to MakerWorld and nowhere else.</p>
   <details class="help">
     <summary>How do I get a BambuCloud token?</summary>
     <ol>
@@ -915,20 +935,14 @@ temperatures are kept, their machine is replaced. It then opens here, ready to s
     whole Bambu Cloud session, and it lasts about 90 days. It is only needed to pull a
     <i>link</i>; a <code>.3mf</code> you already have converts without one.</p>
   </details>
-</div>
-
-<label for="url">MakerWorld link</label>
-<div class="row">
-  <input id="url" type="text" placeholder="https://makerworld.com/en/models/...">
-  <button id="resolve" class="primary">Find plates</button>
-</div>
+</details>
 
 <div id="pick" class="panel" hidden>
   <div id="pickTitle" style="margin-bottom:8px"></div>
   <div id="plates"></div>
 </div>
 
-<label>...or a .3mf you already have</label>
+<label>...or a .3mf on this machine</label>
 <div id="drop" class="drop">
   <div><b>Drop a .3mf here</b>, or
     <button id="browse" class="quiet">choose a file</button></div>
@@ -1143,7 +1157,12 @@ temperatures are kept, their machine is replaced. It then opens here, ready to s
     if (!message || !message.type) return;
     switch (message.type) {
       case "state":
-        if ($("token") && message.token_set) $("token").placeholder = "(saved)";
+        if ($("token") && message.token_set) {
+          $("token").placeholder = "(saved)";
+          // Otherwise the confirmation is inside a closed panel, which reads as
+          // nothing having been saved.
+          if ($("tokenPanel")) $("tokenPanel").open = true;
+        }
         if (message.printer) showBanner("Converting for: " + message.printer, "");
         break;
       case "resolved":
@@ -1167,6 +1186,13 @@ temperatures are kept, their machine is replaced. It then opens here, ready to s
         break;
       case "files":
         renderFiles(message);
+        break;
+      case "need_token":
+        // The user has somewhere to go, so take them there rather than only
+        // naming the problem.
+        setBusy(false);
+        if ($("tokenPanel")) $("tokenPanel").open = true;
+        showBanner(message.message, "err");
         break;
       case "opened":
         setBusy(false);
@@ -1206,11 +1232,19 @@ temperatures are kept, their machine is replaced. It then opens here, ready to s
     post({ type: "fetch", instance_id: button.getAttribute("data-instance"),
            title: button.getAttribute("data-title") });
   });
-  if ($("convertPath")) $("convertPath").addEventListener("click", function () {
+  function convertFromPath() {
     var path = $("path") ? $("path").value.trim() : "";
     if (!path) { showBanner("Give the full path to a .3mf file.", "err"); return; }
     setBusy(true, "Reading and converting...");
     post({ type: "convert_path", path: path });
+  }
+
+  if ($("convertPath")) $("convertPath").addEventListener("click", convertFromPath);
+  // A dropped file converts on its own and so does a chosen one, because each has
+  // an end: the file lands, the dialog closes. A typed path has no such moment, so
+  // Enter is what makes the button an alternative rather than a requirement.
+  if ($("path")) $("path").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { e.preventDefault(); convertFromPath(); }
   });
 
   // A dropped or picked file. The page can read the bytes but cannot see a path,
@@ -1325,6 +1359,8 @@ class MakerWorldPage(orca.pages.PagesPluginCapabilityBase):
             return
         try:
             handler(msg)
+        except TokenNeeded as exc:
+            self.post_message({"type": "need_token", "message": str(exc)})
         except MakerWorldError as exc:
             self.post_message({"type": "error", "message": str(exc)})
         except Exception as exc:            # never let the tab die on a bug
@@ -1371,6 +1407,10 @@ class MakerWorldPage(orca.pages.PagesPluginCapabilityBase):
         try:
             blob, name = fetch_instance_3mf(instance_id, token)
             self._convert_and_open(blob, title or name)
+        except TokenNeeded as exc:
+            # This runs off the main thread, so it has to classify its own failure
+            # rather than leaving it to the message handler.
+            self.post_message({"type": "need_token", "message": str(exc)})
         except MakerWorldError as exc:
             self.post_message({"type": "error", "message": str(exc)})
         except Exception as exc:

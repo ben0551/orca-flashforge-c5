@@ -6,7 +6,7 @@ name: Publish MakerWorld C5 to OrcaCloud
 # version, so the two are released and updated independently: a `flashforge-v*` tag
 # never republishes this one, and vice versa.
 #
-# The tag (e.g. makerworld-vX.Y.Z) becomes the plugin version and
+# The tag (e.g. 3mf-vX.Y.Z) becomes the plugin version and
 # must be a semantic version greater than the version currently listed.
 #
 # One-time setup, in the Orca Cloud web portal, **once per plugin**:
@@ -28,14 +28,14 @@ env:
   # Space-separated globs matching the plugin files to upload (.py / .whl).
   # The `_any` suffix is Orca Cloud's universal (OS-independent) marker and is
   # required on uploaded filenames.
-  PLUGIN_FILES: "makerworld-c5_any.py"
+  PLUGIN_FILES: "3mf-converter_any.py"
   # Stripped off the release tag to give the version.
-  TAG_PREFIX: "makerworld-v"
+  TAG_PREFIX: "3mf-v"
 
 jobs:
   publish:
-    # The tag decides which plugin is being released: `makerworld-vX.Y.Z`.
-    if: startsWith(github.event.release.tag_name, 'makerworld-v')
+    # The tag decides which plugin is being released: `3mf-vX.Y.Z`.
+    if: startsWith(github.event.release.tag_name, '3mf-v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

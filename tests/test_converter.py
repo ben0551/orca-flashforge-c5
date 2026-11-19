@@ -5,7 +5,7 @@ are made against the *converted project settings* - what OrcaSlicer would load -
 and against the bytes the hand-off would send, not against what the plugin
 believes it produced.
 
-    python3 tests/test_makerworld.py
+    python3 tests/test_converter.py
 """
 
 import base64
@@ -145,8 +145,8 @@ def read_config(path):
 
 
 def load_plugin(workdir):
-    source = os.path.join(ROOT, "makerworld-c5_any.py")
-    target = os.path.join(workdir, "makerworld-c5_any.py")
+    source = os.path.join(ROOT, "3mf-converter_any.py")
+    target = os.path.join(workdir, "3mf-converter_any.py")
     shutil.copy2(source, target)
     sys.modules["orca"] = fake_orca.make_module()
     spec = importlib.util.spec_from_file_location("ffc5_mw_under_test", target)
@@ -181,7 +181,7 @@ def main():
         package = fake_orca.make_module()
         sys.modules["orca"] = package
         spec = importlib.util.spec_from_file_location(
-            "mwc5_reg", os.path.join(ROOT, "makerworld-c5_any.py"))
+            "mwc5_reg", os.path.join(ROOT, "3mf-converter_any.py"))
         reg = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(reg)
         package.plugin_class().register_capabilities()
@@ -191,7 +191,7 @@ def main():
         # The tab is named for what it does, not for the site it can pull from:
         # MakerWorld is not the author's mark to put on it, and the plugin takes
         # any .3mf anyway.
-        text = open(os.path.join(ROOT, "makerworld-c5_any.py"),
+        text = open(os.path.join(ROOT, "3mf-converter_any.py"),
                     encoding="utf-8").read()
         check("the tab is named for what it does, not for the source site",
               'return "3mf Converter"' in text and '"MakerWorld"' not in text,
@@ -600,6 +600,30 @@ def main():
         err = [m for m in inbox if m.get("type") == "error"]
         check("a listed file that has since gone is reported",
               bool(err) and "no longer there" in err[-1]["message"], str(err)[:200])
+
+        print()
+        print("Asking for a link without a token")
+        # The user has somewhere to go to fix this, so it is its own message
+        # rather than a plain error the page can only print.
+        check("TokenNeeded is still a MakerWorldError",
+              issubclass(plugin.TokenNeeded, plugin.MakerWorldError))
+        with_none = dict(plugin.load_settings(), bambu_token="")
+        saved_cache = plugin._SETTINGS_CACHE
+        plugin._SETTINGS_CACHE = with_none
+        try:
+            inbox.clear()
+            page.on_message({"type": "fetch", "instance_id": 1, "title": "t"})
+            deadline = time.time() + 6
+            while time.time() < deadline and not inbox:
+                time.sleep(0.05)
+        finally:
+            plugin._SETTINGS_CACHE = saved_cache
+        kinds = [m.get("type") for m in inbox]
+        check("a link with no token asks for one, and is not a plain error",
+              "need_token" in kinds and "error" not in kinds, str(kinds))
+        check("the message says where to put the token",
+              any("Token settings" in (m.get("message") or "") for m in inbox),
+              str(inbox)[:200])
 
         print()
         print("The tab's message flow")

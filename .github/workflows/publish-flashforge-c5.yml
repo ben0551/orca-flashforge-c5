@@ -3,7 +3,7 @@ name: Publish FlashForge C5 to OrcaCloud
 # Publishes the **FlashForge C5** plugin, and only that plugin.
 #
 # Each plugin in this repo has its own workflow, its own tag prefix and its own
-# version, so the two are released and updated independently: a `makerworld-v*` tag
+# version, so the two are released and updated independently: a `3mf-v*` tag
 # never republishes this one, and vice versa.
 #
 # The tag (e.g. flashforge-vX.Y.Z) becomes the plugin version and

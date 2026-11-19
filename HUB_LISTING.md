@@ -11,10 +11,10 @@ unrelated plugins. Everything below is labelled with the plugin it belongs to.
 
 | # | Requirement | Status |
 |---|---|---|
-| 1 | Plugin file carries a target-OS suffix — `any` for a pure Python plugin | Done: `flashforge-c5_any.py`, `makerworld-c5_any.py` |
+| 1 | Plugin file carries a target-OS suffix — `any` for a pure Python plugin | Done: `flashforge-c5_any.py`, `3mf-converter_any.py` |
 | 2 | A `LICENSE` file at the repo root | Done: MIT (covers both) |
 | 3 | `.py` only, no binaries/archives/symlinks in the upload | Done: one `.py` each |
-| 4 | Release tag is a semantic version greater than the one listed | `flashforge-v1.2.0` / `makerworld-v1.0.0` on first publish |
+| 4 | Release tag is a semantic version greater than the one listed | `flashforge-v1.3.1` / `3mf-v1.3.0` on first publish |
 | 5 | Repo connected in the portal, **once per plugin**: **Shared Plugins → Edit plugin → GitHub publishing** → `ben0551/orca-flashforge-c5` → Connect | Not yet — manual step, needs your login |
 | 6 | Portal metadata filled: compatible OrcaSlicer version, supported OS, tags | Not yet — set in the portal, once per listing |
 | 7 | Listing icon uploaded (set in the portal, not in plugin metadata) | Ready: `icon.png` (512), `icon-256.png`, `icon-128.png` |
@@ -26,7 +26,7 @@ tag decides which workflow runs:
 | Plugin | Workflow | Release tag | Version published |
 |---|---|---|---|
 | `flashforge-c5` | `.github/workflows/publish-flashforge-c5.yml` | `flashforge-v1.2.0` | `1.2.0` |
-| `makerworld-c5` | `.github/workflows/publish-makerworld-c5.yml` | `makerworld-v1.0.0` | `1.0.0` |
+| `3mf-converter` | `.github/workflows/publish-3mf-converter.yml` | `3mf-v1.3.0` | `1.3.0` |
 
 Each workflow refuses a tag that is not its own, so publishing one plugin never
 touches the other's listing. That plugin's release notes become its changelog.
@@ -127,7 +127,7 @@ page.
 > About, and → Network) — unless you already set the printer up in OrcaSlicer,
 > in which case the plugin reads them from there.
 
-### `makerworld-c5` (3mf Converter) → listing 2
+### `3mf-converter` (3mf Converter) → listing 2
 
 **Name:** 3mf Converter
 
@@ -192,7 +192,7 @@ its own type label. The types are **Script**, **Slicing Pipeline**, **Printer
 Connection**, **Pages**, and **Resource Texture** packs.
 
 So `flashforge-c5` presents two rows — Pages (the FlashForge C5 tab) and Printer
-Connection (the printer agent) — and `makerworld-c5` presents one, Pages (the
+Connection (the printer agent) — and `3mf-converter` presents one, Pages (the
 3mf Converter tab). The Pages type does not appear in the listing dropdown, so there
 is nothing to match and nothing to contort; the dropdown describes a narrower set
 than the capability system supports.

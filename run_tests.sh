@@ -9,7 +9,7 @@ python3 tests/test_plugin.py || status=1
 
 echo
 echo "=== 3mf Converter plugin (python) ==="
-python3 tests/test_makerworld.py || status=1
+python3 tests/test_converter.py || status=1
 
 echo
 echo "=== both tabs' pages (node) ==="
