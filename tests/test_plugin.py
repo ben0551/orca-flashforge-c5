@@ -427,6 +427,162 @@ def main():
             check("the light-state parser accepts the firmware's spellings",
                   plugin.normalize_detail({"lightStatus": "open"})["light_on"] is True
                   and plugin.normalize_detail({"lightStatus": "close"})["light_on"] is False)
+
+            # ---------------------------------------------------------------
+            # OrcaSlicer already holds the same three values. 2.5.0 ships a
+            # FlashForge print host whose preset keys are print_host,
+            # flashforge_serial_number and printhost_apikey, so the serial — the
+            # one value with nowhere else to live — can be read rather than typed.
+            print("\nReading OrcaSlicer's own printer preset")
+            orca_module = sys.modules["orca"]
+            original_settings = plugin.load_settings()
+
+            ff_preset = fake_orca.FakePreset(
+                "FlashForge Creator 5 Pro", print_host="192.168.8.128",
+                flashforge_serial_number="SNORCA1", printhost_apikey="ORCACODE",
+                printer_agent="flashforge_c5")
+            orca_bundle = fake_orca.FakePresetBundle(printers=[ff_preset],
+                                                     current=ff_preset)
+            orca_module.install_preset_bundle(orca_bundle)
+
+            values, notes = plugin.preset_connection()
+            check("address, serial and check code are read from OrcaSlicer's preset",
+                  values == {"host": "192.168.8.128", "serial": "SNORCA1",
+                             "check_code": "ORCACODE"}, str(values))
+            check("the read records where each value came from",
+                  len(notes) == 3 and all("preset" in n for n in notes), str(notes))
+
+            # The field accepts a URL and has its own port setting, so anything
+            # wrapped round the host has to come off before the client sees it.
+            check("an address stored as a URL reduces to a bare host",
+                  plugin._bare_host("http://192.168.8.128/") == "192.168.8.128"
+                  and plugin._bare_host("192.168.8.128:8898") == "192.168.8.128"
+                  and plugin._bare_host("admin:pw@192.168.8.128") == "192.168.8.128"
+                  and plugin._bare_host("  192.168.8.128 ") == "192.168.8.128"
+                  and plugin._bare_host("") == "" and plugin._bare_host(None) == "",
+                  plugin._bare_host("http://admin:pw@10.0.0.5:8898/x"))
+
+            # Values can sit on the preset's parent, where only the bundle's
+            # resolved configuration sees them.
+            orca_module.install_preset_bundle(fake_orca.FakePresetBundle(
+                printers=[fake_orca.FakePreset("Inherited")],
+                current=fake_orca.FakePreset("Inherited"),
+                full={"flashforge_serial_number": "SNPARENT",
+                      "printhost_apikey": "PARENTCODE"}))
+            inherited, _ = plugin.preset_connection()
+            check("a value set on the preset's parent is still found",
+                  inherited.get("serial") == "SNPARENT"
+                  and inherited.get("check_code") == "PARENTCODE", str(inherited))
+
+            # The profile may be saved while some other printer is selected, so
+            # the rest of the printer collection is searched too.
+            orca_module.install_preset_bundle(fake_orca.FakePresetBundle(
+                printers=[fake_orca.FakePreset("Bambu Lab A1"),
+                          fake_orca.FakePreset("Creator 5", print_host="10.0.0.9",
+                                               flashforge_serial_number="SNOTHER",
+                                               printhost_apikey="OTHERCODE")],
+                current=fake_orca.FakePreset("Bambu Lab A1")))
+            elsewhere, _ = plugin.preset_connection()
+            check("an unselected printer preset is still searched",
+                  elsewhere.get("serial") == "SNOTHER"
+                  and elsewhere.get("host") == "10.0.0.9", str(elsewhere))
+
+            orca_module.install_preset_bundle(None)
+            check("no preset bundle is survivable rather than fatal",
+                  plugin.preset_connection() == ({}, []),
+                  str(plugin.preset_connection()))
+
+            # Adopt into blanks only: a working configuration must not be
+            # silently replaced by a preset the user may have left stale.
+            orca_module.install_preset_bundle(orca_bundle)
+            plugin._SETTINGS_CACHE = {"host": "10.1.1.1", "port": 8898,
+                                      "serial": "", "check_code": "",
+                                      "poll_seconds": 3}
+            adopted = page._sync_from_orca(overwrite=False)
+            check("adoption fills only what is missing",
+                  adopted["applied"] == {"serial": "SNORCA1",
+                                         "check_code": "ORCACODE"}
+                  and plugin.load_settings()["host"] == "10.1.1.1",
+                  json.dumps(adopted["applied"]))
+
+            plugin._SETTINGS_CACHE = {"host": "10.1.1.1", "port": 8898,
+                                      "serial": "MINE", "check_code": "MINE",
+                                      "poll_seconds": 3}
+            forced = page._sync_from_orca(overwrite=True)
+            check("the explicit action overwrites an existing configuration",
+                  forced["applied"]["host"] == "192.168.8.128"
+                  and plugin.load_settings()["serial"] == "SNORCA1",
+                  json.dumps(forced["applied"]))
+
+            # The tab says where the values came from: a panel that fills itself
+            # in silently is indistinguishable from one the user filled.
+            plugin._SETTINGS_CACHE = {"host": "", "port": 8898, "serial": "",
+                                      "check_code": "", "poll_seconds": 3}
+            orca_tab = Tab(page)
+            orca_tab.send({"type": "hello"})
+            cfg_msg = orca_tab.latest("cfg")
+            check("the tab is told the preset was read",
+                  cfg_msg is not None
+                  and cfg_msg.get("orca", {}).get("found") is True
+                  and set(cfg_msg["orca"]["applied"])
+                  == {"host", "serial", "check_code"},
+                  json.dumps(cfg_msg.get("orca"))[:220])
+            check("the adopted values reach the connection panel",
+                  cfg_msg["cfg"]["host"] == "192.168.8.128"
+                  and cfg_msg["cfg"]["serial"] == "SNORCA1", json.dumps(cfg_msg["cfg"]))
+
+            # The happy path: the preset points at the printer that is actually
+            # running, so the reload confirms instead of reporting a probe error.
+            live_preset = fake_orca.FakePreset(
+                "Creator 5", print_host=host, flashforge_serial_number="SN123",
+                printhost_apikey="CODE9")
+            orca_module.install_preset_bundle(fake_orca.FakePresetBundle(
+                printers=[live_preset], current=live_preset))
+            plugin._SETTINGS_CACHE = {"host": "192.168.8.128", "port": port,
+                                      "serial": "STALE", "check_code": "STALE",
+                                      "poll_seconds": 3}
+            orca_tab.clear()
+            orca_tab.send({"type": "load_orca"})
+            logs = [m.get("message") for m in orca_tab.inbox if m.get("type") == "log"]
+            check("the explicit action confirms rather than being buried by the poll",
+                  logs and logs[-1].startswith("Loaded "), str(logs)[:200])
+            check("the reload leaves the tab talking to the printer it loaded",
+                  orca_tab.latest("files") is not None, str(orca_tab.inbox)[:160])
+
+            orca_module.install_preset_bundle(None)
+            orca_tab.clear()
+            orca_tab.send({"type": "load_orca"})
+            check("with nothing to load the tab names the control to go and use",
+                  "Connection" in ((orca_tab.latest("log") or {}).get("message") or ""),
+                  str(orca_tab.latest("log"))[:200])
+
+            # The agent's preset hand-off carries the address and the access code
+            # but never the serial, so without the preset read the send path
+            # dead-ends asking the user to go and type it.
+            serial_agent = plugin.FlashForgeAgent()
+            events = []
+            serial_agent.set_on_local_connect_fn(lambda *a: events.append(a))
+            plugin._SETTINGS_CACHE = {"host": "", "port": 8898, "serial": "",
+                                      "check_code": "", "poll_seconds": 3}
+            no_serial = serial_agent.connect_printer(fake_orca.PrinterConnectionParams(
+                dev_id=host, host=host, port=str(port), password="CODE9"))
+            check("the agent refuses to connect when no serial can be found",
+                  no_serial == -1 and events and "serial" in events[-1][-1],
+                  f"{no_serial} {events}")
+
+            serial_preset = fake_orca.FakePreset("Creator 5",
+                                                 flashforge_serial_number="SN123")
+            orca_module.install_preset_bundle(fake_orca.FakePresetBundle(
+                printers=[serial_preset], current=serial_preset))
+            plugin._SETTINGS_CACHE = {"host": "", "port": 8898, "serial": "",
+                                      "check_code": "", "poll_seconds": 3}
+            with_serial = serial_agent.connect_printer(fake_orca.PrinterConnectionParams(
+                dev_id=host, host=host, port=str(port), password="CODE9"))
+            check("the agent takes the serial from OrcaSlicer's preset",
+                  with_serial == 0, str(with_serial))
+
+            orca_module.install_preset_bundle(None)
+            plugin._SETTINGS_CACHE = dict(original_settings)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
         staging = os.path.join(tempfile.gettempdir(), "ffc5-staging")

@@ -68,7 +68,7 @@ const IDS = ["banner", "pname", "pip", "pfw", "dot", "stt", "jfile", "barfill",
   "jpct", "jlay", "jel", "jrem", "nozzles", "tbed", "tch", "tdoor", "tdisk",
   "spools", "upwrap", "upbar", "uplabel", "files", "prevwrap", "prevname",
   "previmg", "host",
-  "port", "serial", "code", "poll", "bsave", "cfginfo", "bpause", "bresume",
+  "port", "serial", "code", "poll", "bsave", "borca", "cfginfo", "bpause", "bresume",
   "bcancel", "blight", "bclear", "setup"];
 const byId = {};
 IDS.forEach(id => { byId[id] = makeEl(id); });
@@ -291,6 +291,33 @@ must("Save & test posts the form values", () => {
   assert(m && m.host === "192.168.1.50" && m.serial === "SN999" &&
          m.check_code === "ABCD" && m.port === 8898 && m.poll_seconds === 4,
          JSON.stringify(m));
+});
+
+console.log("\nLoading the printer from OrcaSlicer");
+must("the Load from OrcaSlicer button asks the plugin to read the preset", () => {
+  sent.length = 0;
+  byId["borca"].dispatch("click");
+  assert(sent.some(x => x.type === "load_orca"), JSON.stringify(sent));
+});
+must("values taken from the preset are announced, and named in plain words", () => {
+  deliver({ type: "cfg",
+            cfg: { host: "192.168.8.128", port: 8898, serial: "SNORCA1",
+                   check_code: "ORCACODE", poll_seconds: 3 },
+            orca: { found: true,
+                    applied: { host: "192.168.8.128", serial: "SNORCA1",
+                               check_code: "ORCACODE" } } });
+  const text = byId["banner"].textContent;
+  assert(/OrcaSlicer/.test(text), text);
+  assert(/Filled address, serial number, access code/.test(text), text);
+  assert(byId["host"].value === "192.168.8.128" && byId["serial"].value === "SNORCA1",
+         "the form was not filled from the preset");
+});
+must("a config that came from the file rather than the preset announces nothing", () => {
+  byId["banner"].textContent = "";
+  deliver({ type: "cfg", cfg: { host: "10.0.0.9", port: 8898, serial: "SN1",
+                                check_code: "CC", poll_seconds: 5 },
+            orca: { found: false, applied: {} } });
+  assert(byId["banner"].textContent === "", byId["banner"].textContent);
 });
 
 console.log("\nFinding the printer settings");

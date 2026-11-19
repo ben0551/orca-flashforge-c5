@@ -146,6 +146,135 @@ def save_settings(update):
 
 
 # --------------------------------------------------------------------------- #
+# OrcaSlicer's own printer preset — the same three values already live there
+# --------------------------------------------------------------------------- #
+#
+# OrcaSlicer 2.5.0 ships a FlashForge print host, so anyone who set this printer
+# up in the slicer has already typed the address, the serial number and the LAN
+# check code once. They are kept on the printer preset under these keys —
+# verified against the 2.5.0 source, where `Flashforge::Flashforge` reads exactly
+# them (`src/slic3r/Utils/Flashforge.cpp`) and `Preset::printer_options()` lists
+# them (`src/libslic3r/Preset.cpp`):
+#
+#   print_host                "Hostname, IP or URL"
+#   flashforge_serial_number  "Serial Number"
+#   printhost_apikey          "API Key / Password"   (the LAN check code)
+#
+# `orca.host.preset_bundle()` gives a read-only view of the printer preset
+# collection. Physical Printer profiles are a *separate* collection the plugin
+# API does not expose, so the values are looked for on the selected preset, then
+# in the bundle's resolved configuration, then on any printer preset at all.
+
+ORCA_KEY_HOST = "print_host"
+ORCA_KEY_SERIAL = "flashforge_serial_number"
+ORCA_KEY_CODE = "printhost_apikey"
+ORCA_KEY_AGENT = "printer_agent"
+
+ORCA_FIELDS = ((ORCA_KEY_HOST, "host"),
+               (ORCA_KEY_SERIAL, "serial"),
+               (ORCA_KEY_CODE, "check_code"))
+
+
+def _bare_host(value):
+    """Reduce whatever OrcaSlicer stored to the bare host our client wants.
+
+    The field accepts a URL and carries its own port setting, so a scheme, a
+    path, embedded credentials and a trailing ``:port`` all have to come off.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if "://" in text:
+        text = text.split("://", 1)[1]
+    text = text.split("/", 1)[0].split("@")[-1]
+    if text.count(":") == 1:
+        head, tail = text.rsplit(":", 1)
+        if tail.isdigit():
+            text = head
+    return text.strip()
+
+
+def _preset_value(preset, key):
+    """One key off a preset, as a stripped string; "" when unset or unavailable."""
+    try:
+        value = preset.config_value(key)
+    except Exception:
+        return ""
+    return str(value).strip() if value not in (None, "") else ""
+
+
+def preset_connection():
+    """Read the FlashForge connection out of OrcaSlicer's own printer preset.
+
+    Returns ``(values, notes)`` — values holds whichever of host/serial/
+    check_code were found, notes says where each came from. Never raises: outside
+    OrcaSlicer, before the GUI is ready, or on a build without the preset API this
+    comes back empty and the plugin falls back to its own settings file.
+    """
+    values, notes = {}, []
+    try:
+        import orca
+        bundle = orca.host.preset_bundle()
+    except Exception:
+        return values, notes
+
+    def take(preset, where):
+        for key, field in ORCA_FIELDS:
+            if values.get(field):
+                continue
+            raw = _preset_value(preset, key)
+            if not raw:
+                continue
+            values[field] = _bare_host(raw) if field == "host" else raw
+            notes.append(f"{field} from {where}")
+
+    try:
+        take(bundle.current_printer_preset(), "the selected printer preset")
+    except Exception:
+        pass
+
+    # A value set on the preset's parent rather than on the preset itself only
+    # shows up in the bundle's resolved configuration.
+    for key, field in ORCA_FIELDS:
+        if values.get(field):
+            continue
+        try:
+            raw = bundle.full_config_value(key)
+        except Exception:
+            raw = None
+        if raw in (None, ""):
+            continue
+        text = str(raw).strip()
+        values[field] = _bare_host(text) if field == "host" else text
+        notes.append(f"{field} from the resolved configuration")
+
+    # The profile may be saved with a different printer selected. Prefer a preset
+    # bound to this agent, then any other.
+    if len(values) < len(ORCA_FIELDS):
+        try:
+            printers = bundle.printers
+            bound, rest = [], []
+            for index in range(printers.size()):
+                try:
+                    preset = printers.preset(index)
+                except Exception:
+                    continue
+                if _preset_value(preset, ORCA_KEY_AGENT) == AGENT_ID:
+                    bound.append(preset)
+                else:
+                    rest.append(preset)
+            for preset, where in ([(p, "a preset bound to this plugin") for p in bound]
+                                  + [(p, "a printer preset") for p in rest]):
+                if len(values) >= len(ORCA_FIELDS):
+                    break
+                take(preset, where)
+        except Exception:
+            pass
+
+    return values, notes
+
+
+# --------------------------------------------------------------------------- #
 # Printer client — stdlib only, mirroring the vendor app's request shapes
 # --------------------------------------------------------------------------- #
 
@@ -876,7 +1005,8 @@ PAGE = r"""
     </div>
     <div class="row" style="margin-top:9px">
       <button id="bsave" class="primary">Save &amp; test</button>
-      <span class="small dim" id="cfginfo">Saved to settings.json beside the plugin, mode 0600.
+      <button id="borca">Load from OrcaSlicer</button>
+      <span class="small dim" id="cfginfo">Kept in settings.json beside the plugin, mode 0600.
         Never sent anywhere except your printer.</span>
     </div>
   </div>
@@ -954,6 +1084,14 @@ PAGE = r"""
       .replace(/"/g, "&quot;");
   }
   function post(obj){ orca.postMessage(obj); }
+  var CFG_LABEL = { host: "address", port: "port", serial: "serial number",
+                    check_code: "access code" };
+  var CFG_ORDER = ["host", "port", "serial", "check_code"];
+  function cfgWords(keys){
+    return keys.slice().sort(function(a, b){
+      return CFG_ORDER.indexOf(a) - CFG_ORDER.indexOf(b);
+    }).map(function(k){ return CFG_LABEL[k] || k; }).join(", ");
+  }
 
   var state = { spools: [], status: null, cfg: null, files: [] };
   var pollTimer = null, uploadTimer = null;
@@ -1061,13 +1199,20 @@ PAGE = r"""
     }
   }
 
-  function paintCfg(cfg){
+  function paintCfg(cfg, orca){
     state.cfg = cfg || {};
     $("host").value   = cfg.host || "";
     $("port").value   = cfg.port || 8898;
     $("serial").value = cfg.serial || "";
     $("code").value   = cfg.check_code || "";
     $("poll").value   = cfg.poll_seconds || 3;
+    // Say where the values came from. A panel that fills itself in silently is
+    // indistinguishable from one the user already filled, and the serial number
+    // is exactly the field people lose track of.
+    if (orca && orca.found && orca.applied && Object.keys(orca.applied).length) {
+      showBanner("Filled " + cfgWords(Object.keys(orca.applied))
+                 + " from your OrcaSlicer printer preset.", "ok");
+    }
     // Until an address is set this panel is the only thing that matters, so it
     // must not be the sixth card below the fold. Once configured it drops back
     // to the end, out of the way.
@@ -1125,6 +1270,12 @@ PAGE = r"""
              poll_seconds: Number($("poll").value) || 3 });
     });
 
+    // The same three values usually already exist in OrcaSlicer's own printer
+    // preset, so offer the explicit overwrite rather than only ever filling blanks.
+    $("borca").addEventListener("click", function(){
+      post({ type: "load_orca" });
+    });
+
     $("bpause").addEventListener("click", function(){ post({ type: "control", action: "pause" }); });
     $("bresume").addEventListener("click", function(){ post({ type: "control", action: "resume" }); });
     $("bcancel").addEventListener("click", function(){ post({ type: "control", action: "cancel" }); });
@@ -1166,7 +1317,7 @@ PAGE = r"""
         $("stt").textContent = (m.status && m.status.status) || "unknown";
         showSetupBanner(!!m.needs_setup);
         break;
-      case "cfg":   paintCfg(m.cfg); break;
+      case "cfg":   paintCfg(m.cfg, m.orca); break;
       case "files": paintFiles(m.files, m.detail); break;
       case "preview":
         $("prevname").textContent = m.filename;
@@ -1231,6 +1382,7 @@ class FlashForgePage(orca.pages.PagesPluginCapabilityBase):
                 "status": self._status,
                 "files": self._files,
                 "save_cfg": self._save_cfg,
+                "load_orca": self._load_orca,
                 "preview": self._preview,
                 "reprint": self._reprint,
                 "control": self._control,
@@ -1249,9 +1401,48 @@ class FlashForgePage(orca.pages.PagesPluginCapabilityBase):
     def _hello(self, _msg):
         # Runs on the UI thread, so this is where the network permission prompt
         # is raised for the first time.
-        self.post_message({"type": "cfg", "cfg": load_settings()})
+        info = self._sync_from_orca(overwrite=False)
+        self.post_message({"type": "cfg", "cfg": load_settings(), "orca": info})
         self._status({})
         self._files({})
+
+    def _sync_from_orca(self, overwrite):
+        """Copy what OrcaSlicer already knows into the plugin's own settings.
+
+        ``overwrite=False`` only fills blanks, so a working configuration is never
+        silently replaced by a preset the user may have left stale; the explicit
+        "Load from OrcaSlicer" action passes True.
+        """
+        values, notes = preset_connection()
+        if not values:
+            return {"found": False, "applied": {}, "notes": []}
+        cfg = load_settings()
+        applied = {key: val for key, val in values.items()
+                   if overwrite or not cfg.get(key)}
+        if applied:
+            save_settings(applied)
+        return {"found": True, "applied": applied, "notes": notes, "values": values}
+
+    def _load_orca(self, _msg):
+        info = self._sync_from_orca(overwrite=True)
+        self.post_message({"type": "cfg", "cfg": load_settings(), "orca": info})
+        if not info["found"]:
+            self.post_message({
+                "type": "log",
+                "message": "Nothing to load — OrcaSlicer has no printer connection "
+                           "saved. Open it with the Connection button beside "
+                           "Printer, set Host Type to Flashforge and fill in the "
+                           "address, serial number and access code."})
+            return
+        summary = ("Loaded " + ", ".join(sorted(info["applied"])) + " from OrcaSlicer."
+                   if info["applied"] else "Already up to date with OrcaSlicer.")
+        # Poll first and report second: both land in the same tick, so a probe
+        # that fails would otherwise bury the confirmation before it is read —
+        # and when it fails, the error is the message that matters.
+        error = self._status({})
+        self._files({})
+        if not error:
+            self.post_message({"type": "log", "message": summary})
 
     def _status(self, _msg):
         status, error = RUNTIME.refresh()
@@ -1266,6 +1457,7 @@ class FlashForgePage(orca.pages.PagesPluginCapabilityBase):
             # With nothing configured the page shows a persistent setup banner
             # carrying a button; a plain log line would only overwrite it.
             self.post_message({"type": "log", "message": error})
+        return error
 
     def _files(self, _msg):
         client = RUNTIME.client()
@@ -1487,7 +1679,11 @@ class FlashForgeAgent(orca.printer_agent.PrinterAgentBase):
             host = getattr(params, "host", "") or cfg.get("host") or ""
             port = int(getattr(params, "port", "") or 0) or cfg.get("port") or DEFAULT_API_PORT
             code = getattr(params, "password", "") or cfg.get("check_code") or ""
-            serial = cfg.get("serial") or ""
+            # The preset hands over the address and the access code but never the
+            # serial, so take that from OrcaSlicer's own preset when it is there —
+            # otherwise the agent path dead-ends asking the user to go and type it.
+            serial = (cfg.get("serial")
+                      or preset_connection()[0].get("serial") or "")
             # Persist what OrcaSlicer told us so both paths agree.
             update = {"host": host, "port": port}
             if code:

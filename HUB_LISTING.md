@@ -64,7 +64,9 @@ page.
 > port 8898 instead: a FlashForge C5 tab with live status, temperatures, the
 > 4-slot material station, job control, and the files already on the printer with
 > a plate preview and one-click reprint — plus a printer agent so OrcaSlicer's own
-> Send and Print buttons work too. Nothing leaves your LAN.
+> Send and Print buttons work too. If the printer is already set up in OrcaSlicer
+> under its **Flashforge** host type, the plugin reads the address, serial and
+> access code from there rather than asking again. Nothing leaves your LAN.
 
 **Long description**
 
@@ -85,6 +87,9 @@ page.
 > - **OrcaSlicer's own buttons** — a printer agent so **Send to printer** and
 >   **Print** work directly (needs OrcaSlicer's experimental "use printer agents"
 >   preference). This is the sending path.
+> - **No retyping** — if you already set this printer up in OrcaSlicer's own
+>   **Flashforge** host type, the plugin reads the address, serial number and
+>   access code straight out of that printer preset and fills its own panel in.
 >
 > **Two things it handles that the raw API does not**
 >
@@ -95,13 +100,15 @@ page.
 >   plugin zeroes the job block when the printer is idle rather than showing
 >   garbage.
 >
-> **Privacy.** Your serial number and LAN check code are stored in `settings.json`
-> beside the plugin at mode 0600 and are sent to nothing but your printer. The
+> **Privacy.** Your serial number and LAN check code live in `settings.json`
+> beside the plugin at mode 0600, or in your OrcaSlicer printer preset if you had
+> already set one up — either way they are sent to nothing but your printer. The
 > plugin has no dependencies and contacts no server.
 >
 > **Requirements.** OrcaSlicer 2.5.0 or newer. The printer on the same LAN, with
 > its serial number and LAN check code to hand (printer touchscreen → Device →
-> About, and → Network).
+> About, and → Network) — unless you already set the printer up in OrcaSlicer,
+> in which case the plugin reads them from there.
 
 ## Capability types and the hub
 

@@ -233,6 +233,70 @@ class _Base:
         raise NotImplementedError
 
 
+# --- orca.host -------------------------------------------------------------
+
+class FakePreset:
+    """A preset stand-in: the keys it sets, as config_value() would return them."""
+
+    def __init__(self, name="", **values):
+        self.name = name
+        self.values = dict(values)
+
+    def config_value(self, key):
+        return self.values.get(key)
+
+    def config_keys(self):
+        return sorted(self.values)
+
+    def label(self, no_alias=False):
+        return self.name
+
+
+class FakePresetCollection:
+    def __init__(self, presets):
+        self._presets = list(presets)
+
+    def size(self):
+        return len(self._presets)
+
+    def preset(self, index):
+        if not 0 <= index < len(self._presets):
+            raise IndexError("preset index out of range")
+        return self._presets[index]
+
+    def preset_names(self):
+        return [p.name for p in self._presets]
+
+
+class FakePresetBundle:
+    """Stands in for PresetBundle: a printer collection plus a resolved config.
+
+    ``current`` is the edited printer preset; ``full`` is the bundle's flattened
+    configuration, which is the only place a value set on the preset's parent
+    shows up.
+    """
+
+    def __init__(self, printers=None, full=None, current=None):
+        self._printers = list(printers or [])
+        self._full = dict(full or {})
+        self._current = current
+
+    @property
+    def printers(self):
+        return FakePresetCollection(self._printers)
+
+    def current_printer_preset(self):
+        if self._current is None:
+            raise RuntimeError("no printer preset is selected")
+        return self._current
+
+    def full_config_value(self, key):
+        return self._full.get(key)
+
+    def full_config_keys(self):
+        return sorted(self._full)
+
+
 def make_module():
     module = types.ModuleType("orca")
     module.PluginType = PluginType
@@ -284,4 +348,17 @@ def make_module():
     module.printer_agent = agent
 
     module.host = types.ModuleType("orca.host")
+
+    def _no_bundle():
+        # What the real host does before the GUI/model is ready.
+        raise RuntimeError("the GUI is not ready")
+
+    module.host.preset_bundle = _no_bundle
+    module.host.app_language = lambda: "en_US"
+
+    def install_preset_bundle(bundle):
+        """Point orca.host at a bundle, or back at the not-ready state."""
+        module.host.preset_bundle = (lambda: bundle) if bundle is not None else _no_bundle
+
+    module.install_preset_bundle = install_preset_bundle
     return module

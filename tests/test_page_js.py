@@ -83,6 +83,8 @@ def main():
              not re.search(r"\$\{[^}]*\?\.\(", js)),
             ("the stored-file rows offer a preview",
              'data-preview="' in js),
+            ("the connection panel offers to load OrcaSlicer's own settings",
+             'id="borca"' in page and 'type: "load_orca"' in js),
             ("the spool card shows a colour name, not a hex code",
              's.color_name' in js),
         ]

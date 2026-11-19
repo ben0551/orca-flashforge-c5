@@ -19,7 +19,9 @@ with no third-party dependencies — nothing is downloaded at plugin load time.
   builds will not list the plugin at all.
 - The printer on the same LAN, in LAN/offline mode, with its **serial number** and
   **LAN check code** to hand (printer touchscreen → Device → About for the serial;
-  Network for the check code).
+  Network for the check code). **If you have already set this printer up in
+  OrcaSlicer, you do not need to type any of it** — see *Reading OrcaSlicer's own
+  printer settings* below.
 
 ## What you get
 
@@ -46,10 +48,11 @@ with no third-party dependencies — nothing is downloaded at plugin load time.
    Accept both — without the network permission the plugin cannot reach the
    printer.
 
-3. Open the **FlashForge C5** tab, fill in the connection panel (address, serial,
-   LAN check code) and press **Save & test**. Settings are written to
-   `settings.json` next to the plugin, mode 0600. They go nowhere except your
-   printer.
+3. Open the **FlashForge C5** tab. If OrcaSlicer already knows this printer, the
+   connection panel arrives filled in and says so. Otherwise fill in the address,
+   serial number and LAN check code and press **Save & test**. Settings are
+   written to `settings.json` next to the plugin, mode 0600, and go nowhere
+   except your printer.
 
 4. Slice a model, then use OrcaSlicer's own **Send to printer** / **Print** button
    on the preview screen. This plugin supplies the printer agent behind that
@@ -101,11 +104,45 @@ OrcaSlicer feature:
 2. In the printer preset, **Basic information → Advanced → Printer Agent**, choose
    **FlashForge Creator 5**, and set the preset's print host to the printer's
    address with the LAN check code as its API key.
-3. Set the printer **serial number** on the FlashForge C5 tab — OrcaSlicer's
-   preset stores the address and access code but not the serial.
+3. The printer **serial number** is read from OrcaSlicer's own preset when it is
+   there (see below). If it is not, set it once on the FlashForge C5 tab —
+   OrcaSlicer passes the address and access code to an agent but never the serial.
 
 OrcaSlicer's **Send to printer** then uploads with the same bundle-unwrapping the
 tab does, and **Print** uploads and starts the job in one step.
+
+## Reading OrcaSlicer's own printer settings
+
+OrcaSlicer 2.5.0 has a built-in FlashForge print host, so a printer set up there
+has already had all three values typed once. They live on the printer preset:
+
+| OrcaSlicer field | Preset key | Used as |
+|---|---|---|
+| **Hostname, IP or URL** | `print_host` | `host` |
+| **Serial Number** | `flashforge_serial_number` | `serial` |
+| **API Key / Password** | `printhost_apikey` | `check_code` |
+
+Open that dialog with the **Connection** button (the signal-strength icon) beside
+**Printer**, set **Host Type** to **Flashforge**, and the three fields appear.
+Changing the address field there also runs a network discovery that fills in the
+address *and* the serial number for you.
+
+The plugin reads those keys on start-up through `orca.host.preset_bundle()` and
+fills in anything its own settings file does not have. **Load from OrcaSlicer** in
+the connection panel forces the overwrite. When it takes something it says which
+values came from where, because a panel that fills itself in silently is
+indistinguishable from one that was already right.
+
+Two honest limits:
+
+- The plugin API exposes the printer preset collection but **not** Physical
+  Printer profiles, which is where a modern OrcaSlicer keeps these keys. So the
+  read is best-effort: it looks on the selected printer preset, then in the
+  bundle's resolved configuration, then at every printer preset in the collection.
+  If none of them carry the values, the panel simply stays empty and you type them
+  once, exactly as before.
+- A value is only ever written into a blank. Loading from OrcaSlicer can replace
+  a working configuration, so that is the one action that overwrites.
 
 ## Settings
 
@@ -120,6 +157,10 @@ tab does, and **Print** uploads and starts the job in one step.
 
 Environment overrides, handy for testing: `FFC5_HOST`, `FFC5_PORT`,
 `FFC5_SERIAL`, `FFC5_CHECK_CODE`.
+
+`host`, `serial` and `check_code` can also be filled from OrcaSlicer's own printer
+preset — see *Reading OrcaSlicer's own printer settings* above. The plugin's file
+wins once a value is in it; the read only ever fills blanks.
 
 ## Publishing to the Orca Cloud hub
 
@@ -168,6 +209,11 @@ Verified by the test suites above:
   `.gcode` bytes rather than the bundle.
 - `/gcodeThumb` returning a PNG, and the tab showing it inline against the file
   name.
+- Reading OrcaSlicer's own printer preset: all three keys off the selected preset,
+  a value that only appears in the bundle's resolved configuration, a printer
+  preset that is not the selected one, the blank-only adoption rule, and the
+  agent taking the serial from the preset. A build with no preset API at all is
+  exercised too, since that has to degrade to the manual panel rather than fail.
 - Reprint rebuilding the five-field mapping elements (0-based `toolId`, 1-based
   `slotId`) from the printer's own `gcodeListDetail`.
 - `/detail` normalisation, including zeroing the job block when the printer is
@@ -187,6 +233,14 @@ Not verified here, because it needs the real application and the real printer:
   shape, but no bytes have been sent to a real machine from here.
 - The printer-agent path end to end, which additionally depends on OrcaSlicer's
   experimental "use printer agents" mode.
+- **Whether `preset_bundle()` actually surfaces those keys on a real install.**
+  The plugin API exposes the printer preset collection but *not* Physical Printer
+  profiles, and a modern OrcaSlicer keeps `print_host`,
+  `flashforge_serial_number` and `printhost_apikey` on the latter. The read tries
+  the selected preset, the bundle's resolved configuration and every printer
+  preset in turn, and falls back to the manual panel when none of them carry the
+  values — but which of those paths answers on your machine has not been observed
+  from here. The tab says which one it used.
 
 ## Known limitations
 
