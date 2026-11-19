@@ -1099,7 +1099,7 @@ class MakerWorldPage(orca.pages.PagesPluginCapabilityBase):
     """The 'MakerWorld' tab: convert a MakerWorld project for the selected printer."""
 
     def get_name(self):
-        return "MakerWorld"
+        return "3mf Converter"
 
     def get_ui(self):
         return MAKERWORLD_PAGE
@@ -1261,8 +1261,8 @@ class MakerWorldPage(orca.pages.PagesPluginCapabilityBase):
 
 @orca.plugin
 class MakerWorldC5Plugin(orca.base):
-    """The MakerWorld tab: rebuild a downloaded MakerWorld project for whichever
-    printer is selected in OrcaSlicer."""
+    """The 3mf Converter tab: rebuild a downloaded .3mf for whichever printer is
+    selected in OrcaSlicer."""
 
     def register_capabilities(self):
         try:

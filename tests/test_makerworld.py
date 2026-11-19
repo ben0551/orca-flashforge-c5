@@ -1,4 +1,4 @@
-"""Tests for the MakerWorld C5 plugin: the project conversion and the hand-off.
+"""Tests for the 3mf Converter plugin: the project conversion and the hand-off.
 
 The conversion is the part with real behaviour to get wrong, so the assertions
 are made against the *converted project settings* - what OrcaSlicer would load -
@@ -186,8 +186,17 @@ def main():
         spec.loader.exec_module(reg)
         package.plugin_class().register_capabilities()
         names = {c.__name__ for c in package.registered_capabilities}
-        check("the MakerWorld plugin registers only its own tab",
+        check("the converter registers only its own tab",
               names == {"MakerWorldPage"}, str(sorted(names)))
+        # The tab is named for what it does, not for the site it can pull from:
+        # MakerWorld is not the author's mark to put on it, and the plugin takes
+        # any .3mf anyway.
+        text = open(os.path.join(ROOT, "makerworld-c5_any.py"),
+                    encoding="utf-8").read()
+        check("the tab is named for what it does, not for the source site",
+              'return "3mf Converter"' in text and '"MakerWorld"' not in text,
+              [line.strip() for line in text.splitlines()
+               if '"MakerWorld"' in line][:3])
         check("it declares the hosts it downloads from",
               {"https://makerworld.com", "https://api.bambulab.com",
                "https://makerworld.bblmw.com"}

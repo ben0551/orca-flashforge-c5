@@ -19,7 +19,7 @@ with no third-party dependencies — nothing is downloaded at plugin load time.
 | Plugin file | Listing name | Adds | Tab |
 |---|---|---|---|
 | `flashforge-c5_any.py` | **FlashForge Creator 5 Device Tab** | a device tab and a printer agent | **FlashForge C5** |
-| `makerworld-c5_any.py` | **3mf Converter** | a converter tab | **MakerWorld** |
+| `makerworld-c5_any.py` | **3mf Converter** | a converter tab | **3mf Converter** |
 
 The listing name and the tab name differ on purpose: the hub list is where a
 stranger has to work out what the plugin does, so it says so; the tab is what you
@@ -35,7 +35,7 @@ read while working, so it stays short.
   OrcaSlicer, you do not need to type any of it** — see *Reading OrcaSlicer's own
   printer settings* below.
 - For `makerworld-c5` only, and only when you use a link rather than a file you
-  already have: a **BambuCloud token**. See *The MakerWorld tab* below.
+  already have: a **BambuCloud token**. See *The 3mf Converter tab* below.
 
 ## What you get
 
@@ -50,7 +50,7 @@ read while working, so it stays short.
 
 | Capability | Type | What it does |
 |---|---|---|
-| **MakerWorld** tab | `pages` | Paste a MakerWorld link (or point at a `.3mf`) and get the designer's project rebuilt for the printer you have selected, then opened in OrcaSlicer ready to slice. |
+| **3mf Converter** tab | `pages` | Paste a MakerWorld link (or drop a `.3mf`) and get the designer's project rebuilt for the printer you have selected, then opened in OrcaSlicer ready to slice. |
 
 ## Install
 
@@ -119,7 +119,7 @@ Two things the plugin does that the raw API does not:
   and serves it from `/gcodeThumb`; the tab fetches it on demand and shows it
   inline.
 
-## The MakerWorld tab
+## The 3mf Converter tab
 
 A MakerWorld `.3mf` is a **Bambu Studio project**. Opening one as it comes is not
 an error — OrcaSlicer ships the Bambu profiles, so the file loads and slices
@@ -128,7 +128,7 @@ machine limits, their start and end G-code. Everything they tuned is buried unde
 a printer you do not own, and switching the printer afterwards throws the settings
 away.
 
-The **MakerWorld** tab rebuilds the project for whatever printer is selected in
+The **3mf Converter** tab rebuilds the project for whatever printer is selected in
 OrcaSlicer. Paste a link and pick a plate, and it downloads the plate, converts it,
 and opens the result in the running OrcaSlicer ready to slice.
 
@@ -295,8 +295,8 @@ independently, and the release tag says which one is being published:
 
 Each workflow ignores a tag that is not its own, so tagging one plugin never
 republishes the other. Each plugin needs its **own** portal listing and its own
-connection; the plugin `name` in its metadata — `FlashForge C5`, `MakerWorld C5` —
-is what tells them apart.
+connection; the plugin `name` in its metadata — `FlashForge Creator 5 Device Tab`,
+`3mf Converter` — is what tells them apart.
 
 ## Tests
 
@@ -313,7 +313,7 @@ one covers `makerworld-c5`:
   asserts on what the *printer* received — header casing, the `gcodeFile` part,
   the `fileSize` header, the extracted G-code bytes, the five-field mapping
   elements — not on what the plugin thinks it sent.
-- `tests/test_makerworld.py` runs the real `makerworld-c5` plugin end to end: the URL
+- `tests/test_makerworld.py` runs the real `3mf Converter` plugin end to end: the URL
   parsing, the download (against a stubbed transport, asserting the instance
   endpoint and the bearer header), the conversion, the saved file and the hand-off
   payload. The conversion is asserted key by key — that the designer's layer

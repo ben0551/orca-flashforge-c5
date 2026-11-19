@@ -161,7 +161,7 @@ function clickPlate(index) {
 
 // --- tests ---------------------------------------------------------------- //
 
-console.log("\nMakerWorld page start-up");
+console.log("\n3mf Converter page start-up");
 must("the page posts hello on load", () => {
   assert(sent.some(m => m.type === "hello"), "no hello posted");
 });
@@ -403,4 +403,4 @@ if (failures) {
   console.log(failures + " check(s) failed");
   process.exit(1);
 }
-console.log("all MakerWorld page checks passed");
+console.log("all 3mf Converter page checks passed");

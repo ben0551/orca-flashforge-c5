@@ -127,7 +127,7 @@ page.
 > About, and → Network) — unless you already set the printer up in OrcaSlicer,
 > in which case the plugin reads them from there.
 
-### `makerworld-c5` → listing 2
+### `makerworld-c5` (3mf Converter) → listing 2
 
 **Name:** 3mf Converter
 
@@ -193,7 +193,7 @@ Connection**, **Pages**, and **Resource Texture** packs.
 
 So `flashforge-c5` presents two rows — Pages (the FlashForge C5 tab) and Printer
 Connection (the printer agent) — and `makerworld-c5` presents one, Pages (the
-MakerWorld tab). The Pages type does not appear in the listing dropdown, so there
+3mf Converter tab). The Pages type does not appear in the listing dropdown, so there
 is nothing to match and nothing to contort; the dropdown describes a narrower set
 than the capability system supports.
 

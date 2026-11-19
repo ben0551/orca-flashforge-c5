@@ -74,7 +74,7 @@ def run_makerworld_checks(source, work):
     with open(ids_path, "w", encoding="utf-8") as fh:
         json.dump(page_ids(page), fh)
 
-    print("MakerWorld tab markup")
+    print("3mf Converter tab markup")
     checks = [
         ("the page has exactly one script block",
          page.count("<script>") == 1 and page.count("</script>") == 1),
