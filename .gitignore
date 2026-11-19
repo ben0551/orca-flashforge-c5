@@ -1,3 +1,5 @@
 settings.json
 __pycache__/
 *.pyc
+# Converted MakerWorld projects are user data, not source.
+converted/

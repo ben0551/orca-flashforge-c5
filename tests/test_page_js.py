@@ -34,6 +34,58 @@ def extract_page(source_path):
     return page, page[start:end]
 
 
+def extract_makerworld_page(source_path):
+    """The second tab, which is a plain (non-raw) string."""
+    text = open(source_path, encoding="utf-8").read()
+    match = re.search(r'^MAKERWORLD_PAGE = """(.*?)^"""$', text, re.S | re.M)
+    if not match:
+        raise SystemExit("could not find the MAKERWORLD_PAGE block in the plugin")
+    page = match.group(1)
+    start = page.index("<script>") + len("<script>")
+    end = page.rindex("</script>")
+    return page, page[start:end]
+
+
+def run_makerworld_checks(source, work):
+    """Static checks plus the node harness for the MakerWorld tab."""
+    page, js = extract_makerworld_page(source)
+    js_path = os.path.join(work, "makerworld.js")
+    with open(js_path, "w", encoding="utf-8") as fh:
+        fh.write(js)
+
+    print("MakerWorld tab markup")
+    checks = [
+        ("the page has exactly one script block",
+         page.count("<script>") == 1 and page.count("</script>") == 1),
+        ("the $-helper tolerates both 'id' and '#id' spellings",
+         'charAt(0) === "#"' in js),
+        ("every showBanner call sets display, not just text",
+         'banner.style.display = text ? "block" : "none"' in js),
+        ("no nested template literals (a parse error in the webview)",
+         not re.search(r"\$\{[^}]*`", js)),
+        ("no optional-chaining method calls inside a template literal",
+         not re.search(r"\$\{[^}]*\?\.\(", js)),
+        ("the token itself is never sent back to the page",
+         "token_set" in js and not re.search(r"message\.token\b(?!_set)", js)),
+        ("the fallback names a menu item that exists",
+         "Open Project" in js),
+        ("the page asks for its state on load rather than waiting for a timer",
+         'post({ type: "hello" })' in js),
+    ]
+    failed = 0
+    for name, ok in checks:
+        print(f"  [{'PASS' if ok else 'FAIL'}] {name}")
+        failed += 0 if ok else 1
+
+    result = subprocess.run(["node", os.path.join(HERE, "makerworld_harness.js"), js_path],
+                            capture_output=True, text=True)
+    print(result.stdout)
+    if result.stderr.strip():
+        print(result.stderr.strip())
+    failed += 0 if result.returncode == 0 else 1
+    return failed
+
+
 def main():
     if shutil.which("node") is None:
         print("node is not installed — skipping the page checks")
@@ -100,6 +152,9 @@ def main():
         if result.stderr.strip():
             print(result.stderr.strip())
         failed += 0 if result.returncode == 0 else 1
+
+        print()
+        failed += run_makerworld_checks(source, work)
         return 1 if failed else 0
     finally:
         shutil.rmtree(work, ignore_errors=True)

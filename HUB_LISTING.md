@@ -54,7 +54,7 @@ page.
 **Supported OS:** any (pure Python, standard library only)
 
 **Tags:** `flashforge`, `creator-5`, `creator-5-pro`, `printer-agent`, `lan`,
-`local`, `no-cloud`
+`local`, `no-cloud`, `makerworld`, `3mf`, `converter`
 
 **Short description**
 
@@ -64,9 +64,11 @@ page.
 > port 8898 instead: a FlashForge C5 tab with live status, temperatures, the
 > 4-slot material station, job control, and the files already on the printer with
 > a plate preview and one-click reprint — plus a printer agent so OrcaSlicer's own
-> Send and Print buttons work too. If the printer is already set up in OrcaSlicer
-> under its **Flashforge** host type, the plugin reads the address, serial and
-> access code from there rather than asking again. Nothing leaves your LAN.
+> Send and Print buttons work too. A second tab takes a MakerWorld link and
+> rebuilds the designer's project for the printer you have selected, keeping the
+> settings they tuned, and opens it ready to slice. If the printer is already set
+> up in OrcaSlicer under its **Flashforge** host type, the plugin reads the
+> address, serial and access code from there rather than asking again.
 
 **Long description**
 
@@ -90,6 +92,13 @@ page.
 > - **No retyping** — if you already set this printer up in OrcaSlicer's own
 >   **Flashforge** host type, the plugin reads the address, serial number and
 >   access code straight out of that printer preset and fills its own panel in.
+> - **MakerWorld tab** — paste a MakerWorld link (or point at a `.3mf` you already
+>   have) and the designer's project is rebuilt for the printer you have selected:
+>   their layer height, walls, infill, shells, seam, supports, temperatures and
+>   colours are kept, and their machine is replaced with yours. The converted
+>   project then opens in OrcaSlicer ready to slice. A MakerWorld file is a Bambu
+>   Studio project, so opening one as it comes slices for the designer's printer
+>   and buries everything they tuned.
 >
 > **Two things it handles that the raw API does not**
 >
@@ -103,7 +112,9 @@ page.
 > **Privacy.** Your serial number and LAN check code live in `settings.json`
 > beside the plugin at mode 0600, or in your OrcaSlicer printer preset if you had
 > already set one up — either way they are sent to nothing but your printer. The
-> plugin has no dependencies and contacts no server.
+> MakerWorld tab talks to MakerWorld, and only when you use it; a BambuCloud token
+> (needed to download, and only for that) is kept in the same file and sent to
+> MakerWorld alone. The plugin has no dependencies.
 >
 > **Requirements.** OrcaSlicer 2.5.0 or newer. The printer on the same LAN, with
 > its serial number and LAN check code to hand (printer touchscreen → Device →
@@ -119,10 +130,11 @@ shows *one row per registered capability*, each with its own enable checkbox and
 its own type label. The types are **Script**, **Slicing Pipeline**, **Printer
 Connection**, **Pages**, and **Resource Texture** packs.
 
-So this plugin presents two rows: Pages (the FlashForge C5 tab) and Printer
-Connection (the printer agent). Neither appears in the listing dropdown, so there
-is nothing to match and nothing to contort — the dropdown describes a narrower set
-than the capability system supports.
+So this plugin presents three rows: Pages (the FlashForge C5 tab), Pages (the
+MakerWorld tab) and Printer Connection (the printer agent). Neither page type
+appears in the listing dropdown, so there is nothing to match and nothing to
+contort — the dropdown describes a narrower set than the capability system
+supports.
 
 The printer-agent type is not even ours to set: `PrinterAgentBase.get_type()`
 already returns `orca.PluginType.PrinterConnection` (`"printer-connection"`) and
@@ -159,6 +171,7 @@ The comparable FlashForge plugins, as of 2026-11-19:
 | `UshMask/flashforge-device-tab` | several printers | Device tab panel | MIT | **Read-only.** Single file, has docs and tests |
 | `monkyja/flashforge-connect` | Creator 5 Pro | Pages, **FlashForge cloud account** login (Linux keyring) | AGPL-3.0 | README states the full send "has not been validated with the real printer" |
 | `djvalic/kiln-orca` | AD5X only | IFS tool→slot mapping over Moonraker | GPL-3.0 | Requires Kiln OS custom firmware |
+| **ForgeBridge** (closed source) | MakerWorld / Printables / Creality Cloud / makeronline / Snapmaker Space → FlashForge | Web app + Chrome extension + an OrcaSlicer panel that converts a dragged `.3mf` | proprietary, free | The same conversion idea, and the one to beat on polish; Windows-only panel as of 2026-11 |
 
 Where this plugin stands apart:
 
@@ -171,5 +184,12 @@ Where this plugin stands apart:
   `flashforge-connect` says plainly that its send is unvalidated.
 - **The `.gcode.3mf` trap is handled.** OrcaSlicer exports a bundle this firmware
   lists and then refuses to print; the plugin extracts the inner G-code.
+- **The conversion and the printing are one plugin.** ForgeBridge converts and
+  hands you a project; you still need a way to get it to a FlashForge. Here the
+  same plugin owns the printer, so the converted project opens into the slicer
+  that is already talking to the machine.
+- **The conversion rule is OrcaSlicer's own.** Which settings belong to a machine
+  comes from `Preset::printer_options()`, not a hand-maintained key list, so the
+  kept/replaced split cannot quietly drift from what the slicer actually does.
 - **Permissive licence.** MIT against AGPL-3.0 and GPL-3.0, so it is usable in
   more contexts.

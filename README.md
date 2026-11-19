@@ -13,6 +13,13 @@ It is one Python file in the standard OrcaSlicer plugin format
 ([plugin docs](https://www.orcaslicer.com/wiki/developer_reference/plugin_development/plugin_development.html)),
 with no third-party dependencies — nothing is downloaded at plugin load time.
 
+It adds **two tabs**:
+
+- **FlashForge C5** — live status, temperatures, the material station, job
+  control and the files already on the printer.
+- **MakerWorld** — paste a MakerWorld link and get the designer's project rebuilt
+  for the printer you have selected, then opened in OrcaSlicer ready to slice.
+
 ## Requirements
 
 - **OrcaSlicer 2.5.0 or newer.** The Python plugin system landed in 2.5.0; older
@@ -22,12 +29,15 @@ with no third-party dependencies — nothing is downloaded at plugin load time.
   Network for the check code). **If you have already set this printer up in
   OrcaSlicer, you do not need to type any of it** — see *Reading OrcaSlicer's own
   printer settings* below.
+- For the **MakerWorld** tab only, and only when you use a link rather than a file
+  you already have: a **BambuCloud token**. See *The MakerWorld tab* below.
 
 ## What you get
 
 | Capability | Type | What it does |
 |---|---|---|
 | **FlashForge C5** tab | `pages` | Live status, temperatures, the 4-slot material station, job progress, pause/resume/cancel, light and clear-platform, and the files stored on the printer with a plate **preview** and one-click **reprint**. |
+| **MakerWorld** tab | `pages` | Paste a MakerWorld link (or point at a `.3mf`) and get the designer's project rebuilt for the printer you have selected, then opened in OrcaSlicer ready to slice. |
 | **FlashForge Creator 5** | `printer-connection` | Makes OrcaSlicer's own **Send to printer** / **Print** buttons work against the Creator 5. This is the sending path — the tab watches and drives the machine. |
 
 ## Install
@@ -83,6 +93,53 @@ Two things the plugin does that the raw API does not:
 - **The plate preview.** The firmware keeps a thumbnail beside every stored job
   and serves it from `/gcodeThumb`; the tab fetches it on demand and shows it
   inline.
+
+## The MakerWorld tab
+
+A MakerWorld `.3mf` is a **Bambu Studio project**. Opening one as it comes is not
+an error — OrcaSlicer ships the Bambu profiles, so the file loads and slices
+happily, but it slices for the *designer's* machine: their bed height, their
+machine limits, their start and end G-code. Everything they tuned is buried under
+a printer you do not own, and switching the printer afterwards throws the settings
+away.
+
+The **MakerWorld** tab rebuilds the project for whatever printer is selected in
+OrcaSlicer. Paste a link, pick a plate, and it:
+
+1. downloads the plate from MakerWorld (a BambuCloud token is needed for this —
+   the same one Bambu Studio uses; it is stored in `settings.json` and sent to
+   MakerWorld and nowhere else),
+2. converts it, and
+3. opens the converted project in the running OrcaSlicer, ready to slice.
+
+A `.3mf` you already have works the same way — give the tab its path and no token
+is involved.
+
+**What is kept and what is replaced.** OrcaSlicer already knows which settings
+belong to a machine: `Preset::printer_options()` is that list, and the plugin uses
+it rather than a hand-written one. Every key the machine owns takes the selected
+printer's value; **every other key keeps the designer's**, so layer height, walls,
+infill pattern and density, shells, seam, supports, elephant-foot compensation,
+temperatures and colours all survive. The tab reports the counts and names the
+important ones, rather than asking you to take it on trust.
+
+Two details that matter:
+
+- **Per-extruder settings are resized to the project's own extruder count.** The
+  Creator 5 Pro models its four-slot material station as four extruders; writing
+  a four-entry array into a one-extruder project crashes OrcaSlicer on load, and
+  leaving the designer's `extruder_offset` in place shifts the part. Both are
+  handled.
+- **A machine setting the printer leaves at its default is dropped, not kept.**
+  Leaving the designer's value there would silently override your printer's own
+  default.
+
+**How the converted project reaches you.** The plugin API is read-only — there is
+no "load this file" call — so the tab hands the path to the *running* OrcaSlicer
+through the same message a second launch would send it (D-Bus on Linux,
+LaunchServices on macOS, `WM_COPYDATA` on Windows). The converted file is written
+to `converted/` beside the plugin. If that hand-off cannot be made, the tab says
+so and prints the path, and you can open it with **File → Open Project…**.
 
 ## What the printer will not do
 
@@ -154,9 +211,10 @@ Two honest limits:
 | `check_code` | LAN check code from the touchscreen. A credential — never commit it |
 | `leveling` | Default for "bed levelling before print" |
 | `poll_seconds` | Status poll interval, default 3 |
+| `bambu_token` | BambuCloud token, for downloading from MakerWorld. A credential — never commit it |
 
 Environment overrides, handy for testing: `FFC5_HOST`, `FFC5_PORT`,
-`FFC5_SERIAL`, `FFC5_CHECK_CODE`.
+`FFC5_SERIAL`, `FFC5_CHECK_CODE`, `FFC5_BAMBU_TOKEN`.
 
 `host`, `serial` and `check_code` can also be filled from OrcaSlicer's own printer
 preset — see *Reading OrcaSlicer's own printer settings* above. The plugin's file
@@ -188,7 +246,7 @@ so there is no token to store.
 ./run_tests.sh
 ```
 
-Two suites, neither needing OrcaSlicer or a printer:
+Three suites, none needing OrcaSlicer or a printer:
 
 - `tests/test_plugin.py` runs the real plugin against a mock Creator 5
   (`tests/mock_printer.py`) and a stub `orca` module (`tests/fake_orca.py`), then
@@ -196,9 +254,19 @@ Two suites, neither needing OrcaSlicer or a printer:
   asserts on what the *printer* received — header casing, the `gcodeFile` part,
   the `fileSize` header, the extracted G-code bytes, the five-field mapping
   elements — not on what the plugin thinks it sent.
-- `tests/test_page_js.py` extracts the tab's JavaScript and runs it under Node in
-  a DOM stub against the plugin's real normalised `/detail` payload, checking the
-  rendering, the button wiring and the file-row preview and reprint actions.
+- `tests/test_makerworld.py` drives the MakerWorld tab end to end: the URL
+  parsing, the download (against a stubbed transport, asserting the instance
+  endpoint and the bearer header), the conversion, the saved file and the hand-off
+  payload. The conversion is asserted key by key — that the designer's layer
+  height, infill pattern, supports, temperatures and colours are unchanged, that
+  the machine's limits, G-code and bed height replace theirs, that per-extruder
+  arrays are resized rather than copied, and that the archive's geometry comes
+  through byte for byte.
+- `tests/test_page_js.py` extracts each tab's JavaScript and runs it under Node in
+  a DOM stub — the first against the plugin's real normalised `/detail` payload,
+  the second against real conversion reports — checking the rendering, the button
+  wiring, the file-row actions, and that a failure never replaces the report it
+  belongs to.
 
 ## What is and is not verified
 
@@ -222,17 +290,32 @@ Verified by the test suites above:
   because `/control` answers `Success` to any command including ones it ignores.
 - The tab's rendering and message protocol, the file-row actions, and the printer
   agent's methods.
+- **The MakerWorld conversion, against a real MakerWorld download and real
+  OrcaSlicer.** A converted project was sliced by OrcaSlicer 2.4.2 with *no*
+  `--load-settings` override at all and came out as a FlashForge Creator 5 Pro
+  job — which is the point: the converted file has to carry the machine by itself,
+  the way opening it as a project does. A control run of the same file unconverted
+  sliced as a Bambu Lab P1P, with the designer's machine limits and G-code, and a
+  controlled edit proved the designer's values survive conversion while the
+  machine's replace theirs.
 - Zero third-party dependencies; standard library only.
 
 Not verified here, because it needs the real application and the real printer:
 
-- That OrcaSlicer 2.5.0 loads the plugin and renders the tab. The plugin follows
+- That OrcaSlicer 2.5.0 loads the plugin and renders the tabs. The plugin follows
   the documented API and passes a stub of it, but the stub is not OrcaSlicer.
 - That the printer accepts an upload from this client. The request shape matches a
   client verified against Creator 5 Pro firmware 2.0.0, and the mock enforces that
   shape, but no bytes have been sent to a real machine from here.
 - The printer-agent path end to end, which additionally depends on OrcaSlicer's
   experimental "use printer agents" mode.
+- **The file hand-off against a live OrcaSlicer.** The payload format and the
+  per-platform transport are taken from OrcaSlicer's own `InstanceCheck` and from a
+  published plugin that uses the same route, and the Linux path is asserted against
+  a stubbed `dbus-send` — but no converted file has been pushed into a running
+  OrcaSlicer from here. If the hand-off is refused (the audit hook matches
+  `process` targets verbatim, so a differently-resolved `dbus-send` would not
+  match), the tab says so and prints the path to open by hand instead.
 - **Whether `preset_bundle()` actually surfaces those keys on a real install.**
   The plugin API exposes the printer preset collection but *not* Physical Printer
   profiles, and a modern OrcaSlicer keeps `print_host`,

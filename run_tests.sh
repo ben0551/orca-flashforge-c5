@@ -8,6 +8,10 @@ echo "=== plugin behaviour (python) ==="
 python3 tests/test_plugin.py || status=1
 
 echo
+echo "=== MakerWorld tab (python) ==="
+python3 tests/test_makerworld.py || status=1
+
+echo
 echo "=== tab page (node) ==="
 if command -v node >/dev/null 2>&1; then
   python3 tests/test_page_js.py || status=1

@@ -132,9 +132,18 @@ def main():
             spec.loader.exec_module(reg)
             package.plugin_class().register_capabilities()
             names = {c.__name__ for c in package.registered_capabilities}
-            check("registers exactly the tab and the printer agent",
-                  names == {"FlashForgePage", "FlashForgeAgent"},
+            check("registers the two tabs and the printer agent",
+                  names == {"FlashForgePage", "MakerWorldPage", "FlashForgeAgent"},
                   str(sorted(names)))
+            check("every capability name is unique and free of ';'",
+                  len({c().get_name() for c in package.registered_capabilities}) == len(names)
+                  and not any(";" in c().get_name()
+                              for c in package.registered_capabilities),
+                  str(sorted(c().get_name() for c in package.registered_capabilities)))
+            check("declares the MakerWorld hosts it downloads from",
+                  {"https://makerworld.com", "https://api.bambulab.com"}
+                  <= set(package.requested_permissions.get("network_http", [])),
+                  str(package.requested_permissions.get("network_http")))
             check("declares the printer URLs and the staging directory",
                   any(u.startswith("http://127.0.0.1") for u in
                       package.requested_permissions.get("network_http", [])),
