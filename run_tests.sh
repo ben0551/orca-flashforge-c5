@@ -8,7 +8,7 @@ echo "=== FlashForge Creator 5 Device Tab (python) ==="
 python3 tests/test_plugin.py || status=1
 
 echo
-echo "=== MakerWorld C5 plugin (python) ==="
+echo "=== 3mf Converter plugin (python) ==="
 python3 tests/test_makerworld.py || status=1
 
 echo

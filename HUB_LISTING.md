@@ -129,7 +129,7 @@ page.
 
 ### `makerworld-c5` → listing 2
 
-**Name:** MakerWorld C5
+**Name:** 3mf Converter
 
 **Types:** one capability — Pages. See *Capability types and the hub* below.
 
@@ -168,8 +168,11 @@ page.
 > - **It opens itself.** The converted project is handed straight to the running
 >   OrcaSlicer, ready to slice. If that is refused, the tab says why and prints the
 >   path, so you can finish with **File → Open Project…**.
-> - **A local file works too.** Already have the `.3mf`? Point the tab at it and
->   skip the download entirely.
+> - **A file you already have, or a link.** Drop a `.3mf` straight onto the tab or
+>   pick it with the file chooser — no typing a path — or paste a MakerWorld link and
+>   pick the plate to pull. Downloading a link needs a BambuCloud token, and the tab
+>   explains in place how to get one (it is the `token` cookie from a signed-in
+>   makerworld.com session); a local `.3mf` needs no token at all.
 >
 > **Privacy.** A BambuCloud token (needed to download a link, and only for that)
 > lives in `settings.json` beside the plugin at mode 0600, and is sent to

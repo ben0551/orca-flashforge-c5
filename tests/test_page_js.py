@@ -94,6 +94,16 @@ def run_makerworld_checks(source, work):
          'post({ type: "hello" })' in js),
         ("every element the script looks up is defined in the markup",
          not missing_elements(page, js), str(missing_elements(page, js))),
+        ("the token panel explains how to get a token",
+         "How do I get a BambuCloud token?" in page
+         and "F12" in page and "Cookies" in page
+         and "copy its <b>Value</b>" in page
+         and "Treat it like a password" in page),
+        ("a local .3mf can be dropped or picked, not only typed",
+         'id="drop"' in page and 'id="browse"' in page
+         and 'id="file"' in page and 'type="file"' in page and '.3mf"' in page),
+        ("the drop route still offers the typed path as a fallback",
+         'id="path"' in page and 'id="convertPath"' in page),
     ]
     failed = 0
     for name, ok, *rest in checks:

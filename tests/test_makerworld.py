@@ -8,6 +8,7 @@ believes it produced.
     python3 tests/test_makerworld.py
 """
 
+import base64
 import importlib.util
 import io
 import json
@@ -15,6 +16,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -101,6 +103,31 @@ MACHINE = {
 }
 
 PRINTER_NAME = "Flashforge Creator 5 Pro 0.4 nozzle"
+
+# A project's own slice_info, in the shape MakerWorld ships it: two plates, the
+# second using one of the two filaments the first does.
+SLICE_INFO = b"""<?xml version="1.0" encoding="UTF-8"?>
+<config>
+  <header><header_item key="X-BBL-Client-Type" value="slicer"/></header>
+  <plate>
+    <metadata key="index" value="1"/>
+    <filament id="1" type="PLA" color="#FF0000" used_m="4.2" used_g="12.5"/>
+    <filament id="2" type="PETG" color="#0000FF" used_m="1.1" used_g="3.3"/>
+  </plate>
+  <plate>
+    <metadata key="index" value="2"/>
+    <filament id="1" type="PLA" color="#FFFFFF" used_m="2.0" used_g="6.0"/>
+  </plate>
+</config>
+"""
+
+
+def build_with_slice(path):
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as bundle:
+        bundle.writestr("Metadata/project_settings.config", json.dumps(DESIGNER))
+        bundle.writestr("3D/3dmodel.model", GEOMETRY)
+        bundle.writestr("Metadata/slice_info.config", SLICE_INFO)
+    return path
 
 
 def build_project(path, config=None):
@@ -359,6 +386,103 @@ def main():
                       for a in seen), str(seen[-1:]))
 
         print()
+        print("What the conversion reports")
+        # A MakerWorld .3mf is not sliced - there is no .gcode in it - so what the
+        # report can honestly show is the plates and filaments the file declares,
+        # the tools the project ends up with, and the machine G-code that was
+        # swapped in. All three, rather than only how many keys moved.
+        sliced = open(build_with_slice(os.path.join(workdir, "sliced.3mf")), "rb").read()
+        plates = plugin.plate_summary(sliced)
+        check("every plate and its filaments are found",
+              len(plates) == 2
+              and plates[0]["index"] == "1"
+              and [f["type"] for f in plates[0]["filaments"]] == ["PLA", "PETG"]
+              and plates[1]["filaments"][0]["used_g"] == "6.0", str(plates))
+        bare = open(build_project(os.path.join(workdir, "bare.3mf")), "rb").read()
+        check("a file with no slice_info reports no plates rather than failing",
+              plugin.plate_summary(bare) == []
+              and plugin.plate_summary(b"not a zip at all") == [])
+
+        config, _ = plugin.convert_project(DESIGNER, set(DESIGNER), {}, {})
+        rows = plugin.filament_summary(config)
+        check("every tool gets a row, one per extruder",
+              len(rows) == 1 and rows[0]["tool"] == 1, str(rows))
+        check("a tool with no filament type still gets a row",
+              len(plugin.filament_summary({"nozzle_diameter": ["0.4", "0.4"],
+                                           "filament_type": ["PLA"]})) == 2)
+
+        gcode = plugin.gcode_summary({"machine_start_gcode": "G28\nG1 Z5\nG1 X0\n",
+                                      "machine_end_gcode": "M104 S0\n",
+                                      "something_else": "ignored"})
+        check("the machine G-code is summarised, not dumped",
+              [g["which"] for g in gcode] == ["start", "end"]
+              and gcode[0]["lines"] == 3 and gcode[0]["head"][0] == "G28"
+              and gcode[1]["lines"] == 1, str(gcode))
+        check("a config with no machine G-code summarises to nothing",
+              plugin.gcode_summary({}) == []
+              and plugin.gcode_summary({"machine_start_gcode": "   "}) == [])
+
+        print()
+        print("A .3mf dropped on the page")
+        # The section above deliberately ran with no printer to prove the refusal
+        # path, so put one back: a dropped file converts, and converting needs a
+        # printer selected.
+        orca_stub.install_preset_bundle(fake_orca.FakePresetBundle(
+            printers=[fake_orca.FakePreset(PRINTER_NAME)],
+            current=fake_orca.FakePreset(PRINTER_NAME)))
+        # The page can read a file's bytes but never sees a path, so it arrives
+        # base64-encoded and has to convert the same way a typed path does.
+        page = plugin.MakerWorldPage()
+        inbox = []
+        page.post_message = inbox.append
+        dropped = os.path.join(workdir, "dropped.3mf")
+        build_project(dropped)
+        with open(dropped, "rb") as fh:
+            payload = base64.b64encode(fh.read()).decode("ascii")
+        page.on_message({"type": "convert_data", "name": "dropped.3mf", "data": payload})
+        deadline = time.time() + 15
+        while time.time() < deadline and not [m for m in inbox
+                                              if m.get("type") == "report"]:
+            time.sleep(0.05)
+        reports = [m for m in inbox if m.get("type") == "report"]
+        check("a dropped file converts the same way a typed path does",
+              len(reports) == 1 and reports[0]["report"]["printer"] == PRINTER_NAME,
+              str(reports)[:160])
+        check("the dropped file's name reaches the saved file",
+              bool(reports) and "dropped" in os.path.basename(reports[0]["path"]),
+              reports[0]["path"] if reports else "")
+        check("the report from a dropped file carries the new detail",
+              bool(reports) and "filaments" in reports[0]["report"]
+              and "gcode" in reports[0]["report"]
+              and "plates" in reports[0]["report"])
+
+        page.on_message({"type": "convert_data", "name": "empty.3mf", "data": ""})
+        err = [m for m in inbox if m.get("type") == "error"]
+        check("an empty payload is refused",
+              bool(err) and "empty" in err[-1]["message"].lower(), str(err)[:160])
+
+        inbox.clear()
+        page.on_message({"type": "convert_data", "name": "bad.3mf",
+                         "data": "!!!!not base64!!!!"})
+        err = [m for m in inbox if m.get("type") == "error"]
+        check("a payload that is not base64 is refused with a message",
+              bool(err), str(err)[:160])
+
+        # The guard has to fire before the decode, so it is exercised with the
+        # ceiling lowered rather than by building a 128 MB string.
+        inbox.clear()
+        saved_max = plugin.MAX_UPLOAD_B64
+        plugin.MAX_UPLOAD_B64 = 32
+        try:
+            page.on_message({"type": "convert_data", "name": "huge.3mf",
+                             "data": "A" * 64})
+        finally:
+            plugin.MAX_UPLOAD_B64 = saved_max
+        err = [m for m in inbox if m.get("type") == "error"]
+        check("an oversized drop is refused before it is decoded",
+              bool(err) and "larger than" in err[-1]["message"], str(err)[:160])
+
+        print()
         print("The tab's message flow")
         # the "no printer selected" case above uninstalled the bundle; put it back
         orca_stub.install_preset_bundle(fake_orca.FakePresetBundle(
@@ -421,7 +545,6 @@ def main():
 
         local = build_project(os.path.join(workdir, "local.3mf"))
         page.on_message({"type": "convert_path", "path": local})
-        import time
         for _ in range(100):
             if len([m for m in inbox if m.get("type") == "report"]) >= 2:
                 break

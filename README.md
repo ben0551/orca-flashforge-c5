@@ -19,7 +19,7 @@ with no third-party dependencies — nothing is downloaded at plugin load time.
 | Plugin file | Listing name | Adds | Tab |
 |---|---|---|---|
 | `flashforge-c5_any.py` | **FlashForge Creator 5 Device Tab** | a device tab and a printer agent | **FlashForge C5** |
-| `makerworld-c5_any.py` | **MakerWorld C5** | a converter tab | **MakerWorld** |
+| `makerworld-c5_any.py` | **3mf Converter** | a converter tab | **MakerWorld** |
 
 The listing name and the tab name differ on purpose: the hub list is where a
 stranger has to work out what the plugin does, so it says so; the tab is what you
@@ -129,16 +129,37 @@ a printer you do not own, and switching the printer afterwards throws the settin
 away.
 
 The **MakerWorld** tab rebuilds the project for whatever printer is selected in
-OrcaSlicer. Paste a link, pick a plate, and it:
+OrcaSlicer. Paste a link and pick a plate, and it downloads the plate, converts it,
+and opens the result in the running OrcaSlicer ready to slice.
 
-1. downloads the plate from MakerWorld (a BambuCloud token is needed for this —
-   the same one Bambu Studio uses; it is stored in `settings.json` and sent to
-   MakerWorld and nowhere else),
-2. converts it, and
-3. opens the converted project in the running OrcaSlicer, ready to slice.
+**A `.3mf` you already have is easier still — drop it onto the tab**, or use the
+file chooser next to the drop zone; no token is involved. Reading it this way also
+skips the filesystem peek a typed path needs. The path box is still there for a
+file somewhere you would rather not navigate to.
 
-A `.3mf` you already have works the same way — give the tab its path and no token
-is involved.
+**Getting a token, if you pull a link.** It is the same BambuCloud token Bambu
+Studio uses, and it is a one-off:
+
+1. Sign in at `makerworld.com` in a browser.
+2. Press **F12** for Developer Tools.
+3. **Application** (Chrome, Edge) or **Storage** (Firefox) → **Cookies** →
+   `makerworld.com`.
+4. Click the row named `token` and copy its **Value**.
+5. Paste it into the tab and press **Save token**.
+
+No cookie called `token`? Reload the page, open the **Network** tab, click any
+request to makerworld.com, and keep the `token=…` part of its `cookie:` request
+header. Treat it like a password — it is your whole Bambu Cloud session — and it
+lapses after roughly 90 days, at which point downloads start failing and you paste
+a fresh one. It lives in `settings.json` beside the plugin (mode 0600) and goes to
+MakerWorld and nowhere else.
+
+**What the report tells you.** After a conversion the tab says what came *out*, not
+just how many settings moved: every plate in the file and the filament each one
+uses; the tools the project ends up with, and the filament and profile behind each;
+and the machine start and end G-code that was swapped for your printer's. A
+MakerWorld `.3mf` is unsliced and carries no `.gcode` at all, so the G-code shown is
+the machine block the conversion actually replaced.
 
 **What is kept and what is replaced.** OrcaSlicer already knows which settings
 belong to a machine: `Preset::printer_options()` is that list, and the plugin uses

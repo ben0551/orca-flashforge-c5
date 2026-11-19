@@ -28,12 +28,13 @@ Author: Ben Fischer.  License: MIT.
 # dependencies = []
 #
 # [tool.orcaslicer.plugin]
-# name = "MakerWorld C5"
-# description = "Download a MakerWorld model and rebuild it for the printer selected in OrcaSlicer."
+# name = "3mf Converter"
+# description = "Rebuild a MakerWorld link or any local .3mf for the printer selected in OrcaSlicer."
 # author = "Ben Fischer"
-# version = "1.0.0"
+# version = "1.1.0"
 # ///
 
+import base64
 import io
 import json
 import os
@@ -43,6 +44,7 @@ import sys
 import threading
 import urllib.error
 import urllib.request
+import xml.etree.ElementTree as ET
 import zipfile
 
 import orca
@@ -395,6 +397,93 @@ KEEP_INTERESTING = frozenset((
     "filament_colour",
 ))
 
+# The project's own filaments and machine G-code, so the report can show what the
+# conversion *produced* rather than only how many keys moved. A MakerWorld .3mf is
+# not sliced - it carries no .gcode at all - so "the G-code" here is the machine
+# start/end block the conversion swapped for the printer's, alongside the
+# filament/tool list the project now declares.
+SLICE_INFO = "Metadata/slice_info.config"
+
+# A dropped file arrives base64-encoded through the page's message channel, so a
+# few hundred MB of model would be held in memory three times over. Real .3mf
+# files are a few MB; this guards against a mis-drop rather than being a limit
+# anyone reaches.
+MAX_UPLOAD_B64 = 128 * 1024 * 1024
+
+
+def _per_tool(value, count):
+    """One entry per tool, whatever shape the config stored."""
+    if isinstance(value, list):
+        out = list(value)
+    elif value in (None, ""):
+        out = []
+    else:
+        out = [value]
+    if not out:
+        out = [None]
+    while len(out) < count:
+        out.append(out[-1])
+    return out[:count]
+
+
+def filament_summary(config):
+    """The filament each tool will print, as the converted project declares it."""
+    count = len(config.get("nozzle_diameter") or []) or 1
+    types = _per_tool(config.get("filament_type"), count)
+    colours = _per_tool(config.get("filament_colour"), count)
+    profiles = _per_tool(config.get("filament_settings_id"), count)
+    return [{"tool": i + 1,
+             "type": types[i] or "",
+             "colour": colours[i] or "",
+             "profile": profiles[i] or ""}
+            for i in range(count)]
+
+
+def gcode_summary(config):
+    """The machine G-code now in the project: how much of it, and its head."""
+    out = []
+    for key, label in (("machine_start_gcode", "start"),
+                       ("machine_end_gcode", "end")):
+        text = config.get(key)
+        if not isinstance(text, str) or not text.strip():
+            continue
+        lines = text.strip().splitlines()
+        out.append({"which": label, "lines": len(lines),
+                    "head": [line.rstrip() for line in lines[:4]]})
+    return out
+
+
+def plate_summary(blob):
+    """Plates and the filament each uses, from the source file's slice_info.
+
+    A MakerWorld project is unsliced but still records its plates, so this says
+    how many plates are about to be sliced and which tools each needs. Absent or
+    unreadable slice_info is normal for a bare model, not an error.
+    """
+    try:
+        with zipfile.ZipFile(io.BytesIO(blob)) as archive:
+            if SLICE_INFO not in archive.namelist():
+                return []
+            root = ET.fromstring(archive.read(SLICE_INFO))
+    except Exception:
+        return []
+    plates = []
+    for plate in root.findall("plate"):
+        index = ""
+        for meta in plate.findall("metadata"):
+            if meta.get("key") == "index":
+                index = meta.get("value") or ""
+        plates.append({
+            "index": index or str(len(plates) + 1),
+            "filaments": [{"id": f.get("id") or "",
+                           "type": f.get("type") or "",
+                           "colour": f.get("color") or "",
+                           "used_m": f.get("used_m") or "",
+                           "used_g": f.get("used_g") or ""}
+                          for f in plate.findall("filament")],
+        })
+    return plates
+
 
 def rewrite_3mf(blob, config):
     """A copy of the .3mf with only the project config replaced."""
@@ -484,6 +573,12 @@ def convert_3mf(blob):
     config, report = convert_project(project, keys, values, identity)
     report["printer"] = printer
     report["source_printer"] = project.get("printer_model") or "unknown"
+    # What came out, not just how many keys moved. The plates are read from the
+    # source file; the filaments and the machine G-code are from the converted
+    # config, so they describe what will actually be sliced.
+    report["filaments"] = filament_summary(config)
+    report["gcode"] = gcode_summary(config)
+    report["plates"] = plate_summary(blob)
     return rewrite_3mf(blob, config), report, printer
 
 
@@ -682,13 +777,20 @@ MAKERWORLD_PAGE = """
   #report { font-size: 12px; }
   #report .line { margin-bottom: 3px; }
   code { font-size: 11px; word-break: break-all; }
+  .drop { border: 1px dashed var(--orca-border); border-radius: 6px; padding: 14px;
+          text-align: center; margin-bottom: 4px; }
+  .drop.over { border-color: var(--orca-accent, #2f9e6f); background: rgba(47,158,111,.08); }
+  details.help { margin-top: 8px; font-size: 12px; }
+  details.help summary { cursor: pointer; color: var(--orca-muted); }
+  details.help ol { margin: 6px 0 6px 18px; padding: 0; }
+  details.help li { margin-bottom: 2px; }
 </style>
 
-<h2>MakerWorld &rarr; your printer</h2>
-<p class="note">Paste a MakerWorld link, or point at a <code>.3mf</code> you already
-have. The project is rebuilt for the printer selected in OrcaSlicer: the
-designer's layers, walls, infill, supports and temperatures are kept, their
-machine is replaced. It then opens here, ready to slice.</p>
+<h2>3mf Converter</h2>
+<p class="note">Paste a MakerWorld link, or hand over a <code>.3mf</code> you already
+have &mdash; drop it below, or point at one on disk. The project is rebuilt for the
+printer selected in OrcaSlicer: the designer's layers, walls, infill, supports and
+temperatures are kept, their machine is replaced. It then opens here, ready to slice.</p>
 
 <div class="panel">
   <div class="row"><label for="token" style="margin:0">BambuCloud token</label></div>
@@ -698,6 +800,23 @@ machine is replaced. It then opens here, ready to slice.</p>
   </div>
   <p class="note" style="margin:0">Kept in this plugin's settings.json and sent to
   MakerWorld and nowhere else. Converting a local <code>.3mf</code> needs no token.</p>
+  <details class="help">
+    <summary>How do I get a BambuCloud token?</summary>
+    <ol>
+      <li>Sign in at <code>makerworld.com</code> in your browser.</li>
+      <li>Press <b>F12</b> to open Developer Tools.</li>
+      <li>Open <b>Application</b> (Chrome, Edge) or <b>Storage</b> (Firefox) &rarr;
+          <b>Cookies</b> &rarr; <code>makerworld.com</code>.</li>
+      <li>Click the row named <code>token</code> and copy its <b>Value</b>.</li>
+      <li>Paste it above and press <b>Save token</b>.</li>
+    </ol>
+    <p class="note" style="margin:0 0 6px">No cookie called <code>token</code>? Reload
+    the page, open the <b>Network</b> tab, click any request to makerworld.com, and keep
+    the <code>token=&hellip;</code> part of its <code>cookie:</code> request header.</p>
+    <p class="note" style="margin:0"><b>Treat it like a password</b> &mdash; it is your
+    whole Bambu Cloud session, and it lasts about 90 days. It is only needed to pull a
+    <i>link</i>; a <code>.3mf</code> you already have converts without one.</p>
+  </details>
 </div>
 
 <label for="url">MakerWorld link</label>
@@ -711,9 +830,16 @@ machine is replaced. It then opens here, ready to slice.</p>
   <div id="plates"></div>
 </div>
 
-<label for="path">...or a .3mf already on this machine</label>
-<div class="row">
-  <input id="path" type="text" placeholder="/full/path/to/project.3mf">
+<label>...or a .3mf you already have</label>
+<div id="drop" class="drop">
+  <div><b>Drop a .3mf here</b>, or
+    <button id="browse" class="quiet">choose a file</button></div>
+  <div class="note" style="margin:6px 0 0">Read on this machine and converted in
+  place &mdash; nothing is uploaded anywhere.</div>
+  <input id="file" type="file" accept=".3mf" style="display:none">
+</div>
+<div class="row" style="margin-top:6px">
+  <input id="path" type="text" placeholder="or type a path: /home/you/project.3mf">
   <button id="convertPath">Convert &amp; open</button>
 </div>
 
@@ -796,9 +922,47 @@ machine is replaced. It then opens here, ready to slice.</p>
       "<b>" + r.kept + "</b> settings kept from the designer" +
         (kept ? " (including " + kept + ")" : ""),
       "<b>" + r.replaced + "</b> taken from your printer, <b>" + r.dropped +
-        "</b> reset to OrcaSlicer's defaults",
-      "Saved as <code>" + esc(message.path) + "</code>"
+        "</b> reset to OrcaSlicer's defaults"
     ];
+
+    var plates = r.plates || [];
+    if (plates.length) {
+      lines.push("<b>" + plates.length + "</b> plate" +
+                 (plates.length === 1 ? "" : "s") + " in the file:");
+      plates.forEach(function (p) {
+        var fil = (p.filaments || []).map(function (f) {
+          return esc(f.type || "?") + (f.colour ? " " + esc(f.colour) : "") +
+                 (f.used_g ? " (" + esc(f.used_g) + " g)" : "");
+        }).join(", ");
+        lines.push("&nbsp;&nbsp;plate " + esc(p.index) + (fil ? " &mdash; " + fil : ""));
+      });
+    }
+
+    var filaments = r.filaments || [];
+    if (filaments.length) {
+      lines.push("<b>" + filaments.length + "</b> tool" +
+                 (filaments.length === 1 ? "" : "s") + " after conversion:");
+      filaments.forEach(function (f) {
+        lines.push("&nbsp;&nbsp;tool " + f.tool + " &mdash; " + esc(f.type || "?") +
+                   (f.colour ? " " + esc(f.colour) : "") +
+                   (f.profile ? " <code>" + esc(f.profile) + "</code>" : ""));
+      });
+    }
+
+    var gcode = r.gcode || [];
+    if (gcode.length) {
+      lines.push("Machine G-code, replaced with your printer's:");
+      gcode.forEach(function (g) {
+        var head = (g.head || []).map(function (line) {
+          return esc(line);
+        }).join("<br>");
+        lines.push("&nbsp;&nbsp;" + esc(g.which) + " &mdash; " + g.lines + " line" +
+                   (g.lines === 1 ? "" : "s") +
+                   (head ? ": <code>" + head + "</code>" : ""));
+      });
+    }
+
+    lines.push("Saved as <code>" + esc(message.path) + "</code>");
     box.innerHTML = lines.map(function (line) {
       return '<div class="line">' + line + "</div>";
     }).join("");
@@ -865,6 +1029,58 @@ machine is replaced. It then opens here, ready to slice.</p>
     post({ type: "convert_path", path: path });
   });
 
+  // A dropped or picked file. The page can read the bytes but cannot see a path,
+  // so the file is base64-encoded and handed to the plugin, which converts it
+  // exactly as it would a typed path.
+  function readPicked(file) {
+    if (!file) return;
+    if (String(file.name || "").toLowerCase().slice(-4) !== ".3mf") {
+      showBanner("That is not a .3mf file: " + (file.name || "unknown"), "err");
+      return;
+    }
+    var reader = new FileReader();
+    reader.onload = function () {
+      var text = String(reader.result || "");
+      var comma = text.indexOf(",");
+      if (comma < 0) { showBanner("Could not read that file.", "err"); return; }
+      setBusy(true, "Converting " + file.name + "...");
+      post({ type: "convert_data", name: file.name, data: text.slice(comma + 1) });
+    };
+    reader.onerror = function () { showBanner("Could not read that file.", "err"); };
+    try { reader.readAsDataURL(file); }
+    catch (e) { showBanner("Could not read that file: " + e, "err"); }
+  }
+
+  if ($("drop")) {
+    var drop = $("drop");
+    ["dragenter", "dragover"].forEach(function (type) {
+      drop.addEventListener(type, function (e) {
+        e.preventDefault();
+        drop.classList.add("over");
+      });
+    });
+    ["dragleave", "drop"].forEach(function (type) {
+      drop.addEventListener(type, function (e) {
+        e.preventDefault();
+        drop.classList.remove("over");
+      });
+    });
+    drop.addEventListener("drop", function (e) {
+      var dt = e.dataTransfer;
+      if (dt && dt.files && dt.files.length) readPicked(dt.files[0]);
+    });
+  }
+  if ($("browse") && $("file")) {
+    $("browse").addEventListener("click", function (e) {
+      e.preventDefault();
+      $("file").click();
+    });
+    $("file").addEventListener("change", function (e) {
+      var files = e.target.files;
+      if (files && files.length) readPicked(files[0]);
+    });
+  }
+
   // A panel wired only to setInterval renders empty on first load, so ask once now.
   showBanner("", "");
   post({ type: "hello" });
@@ -908,6 +1124,7 @@ class MakerWorldPage(orca.pages.PagesPluginCapabilityBase):
             "resolve": self._resolve,
             "fetch": self._fetch,
             "convert_path": self._convert_path,
+            "convert_data": self._convert_data,
         }.get(msg.get("type"))
         if not handler:
             return
@@ -979,6 +1196,31 @@ class MakerWorldPage(orca.pages.PagesPluginCapabilityBase):
         title = os.path.splitext(os.path.basename(path))[0]
         threading.Thread(target=self._convert_and_open,
                          args=(blob, title), daemon=True).start()
+
+    def _convert_data(self, msg):
+        """A file the page read for the user, by drop or by picker.
+
+        The page can read the bytes but never sees a path, so the file arrives
+        here base64-encoded and is converted exactly as a typed path is. Nothing
+        leaves the machine.
+        """
+        data = msg.get("data") or ""
+        if len(data) > MAX_UPLOAD_B64:
+            raise MakerWorldError(
+                f"That file is larger than {MAX_UPLOAD_B64 // (1024 * 1024)} MB, "
+                "which is more than this route can carry. Save it to disk and "
+                "convert it by path instead.")
+        try:
+            blob = base64.b64decode(data)
+        except Exception as exc:
+            raise MakerWorldError(f"Could not read the file: {exc}") from exc
+        if not blob:
+            raise MakerWorldError("That file arrived empty.")
+        stem = os.path.splitext(os.path.basename(str(msg.get("name") or "project")))[0]
+        self._ensure_dirs()
+        threading.Thread(target=self._convert_and_open,
+                         args=(blob, safe_filename(stem, "project")),
+                         daemon=True).start()
 
     # -- shared ------------------------------------------------------------- #
 

@@ -40,6 +40,14 @@ function makeEl(id) {
     dispatch(t, ev) {
       (this._listeners[t] || []).forEach(fn => fn(ev || { currentTarget: this, target: this }));
     },
+    classList: {
+      _set: new Set(),
+      add(c) { this._set.add(c); },
+      remove(c) { this._set.delete(c); },
+      contains(c) { return this._set.has(c); },
+      toggle(c, on) { if (on) { this._set.add(c); } else { this._set.delete(c); } },
+    },
+    click() { this.dispatch("click"); },
     querySelectorAll() { return []; },
     querySelector() { return null; },
     setAttribute(k, v) { this.dataset[k] = v; },
@@ -98,6 +106,22 @@ const doc = {
   },
 };
 
+// The page reads a dropped file with readAsDataURL, so the stub has to supply
+// one. The payload is whatever the fake file carries, so the test can assert on
+// exactly the bytes the plugin would receive.
+let lastRead = null;
+function FileReader() {
+  this.readAsDataURL = (blob) => {
+    lastRead = blob;
+    this.result = "data:application/octet-stream;base64," +
+                  ((blob && blob.b64) || "");
+    this.onload();
+  };
+  this.readAsArrayBuffer = () => {
+    throw new Error("the page should read a picked file with readAsDataURL");
+  };
+}
+
 const ctx = {
   document: doc, window: {}, Number, Math, JSON, String, Boolean, Date, Array, Object,
   console: { log: () => {}, error: (...a) => errors.push(a.join(" ")) },
@@ -105,6 +129,7 @@ const ctx = {
   setInterval: () => 1, clearInterval: () => {},
   setTimeout: (fn) => { timers.push(fn); return timers.length; },
   clearTimeout: () => {},
+  FileReader: FileReader,
 };
 ctx.globalThis = ctx;
 vm.createContext(ctx);
@@ -290,6 +315,84 @@ must("a title with quotes and markup cannot break the generated rows", () => {
   assert(html.indexOf('onmouseover="evil()"') < 0, "a quote escaped its attribute: " + html);
   assert(html.indexOf("&lt;img") >= 0, "the markup was not escaped: " + html);
   assert(plateButtons().length === 1, "the row was not rendered");
+});
+
+console.log("\nDropping a .3mf");
+must("a dropped .3mf is read and handed to the plugin", () => {
+  sent.length = 0;
+  var file = { name: "Model.3mf", b64: "UEsDBAoAAAAA" };
+  byId["drop"].dispatch("drop", {
+    preventDefault() {},
+    dataTransfer: { files: [file] },
+  });
+  assert(lastRead === file, "the dropped file was not read");
+  var msg = sent.filter(m => m.type === "convert_data")[0];
+  assert(msg, "nothing was posted: " + JSON.stringify(sent));
+  assert(msg.name === "Model.3mf", "name: " + msg.name);
+  assert(msg.data === "UEsDBAoAAAAA",
+         "the payload is not the file's own bytes: " + msg.data);
+});
+must("anything that is not a .3mf is refused before it is sent", () => {
+  sent.length = 0;
+  byId["drop"].dispatch("drop", {
+    preventDefault() {},
+    dataTransfer: { files: [{ name: "notes.txt", b64: "abc" }] },
+  });
+  assert(sent.length === 0, "it was sent anyway: " + JSON.stringify(sent));
+  assert(byId["banner"].className === "err", "no error shown");
+  assert(byId["banner"].textContent.indexOf("notes.txt") >= 0,
+         "the banner does not name the file: " + byId["banner"].textContent);
+});
+must("the drop zone highlights while a file is over it", () => {
+  byId["drop"].dispatch("dragover", { preventDefault() {} });
+  assert(byId["drop"].classList.contains("over"), "no highlight on dragover");
+  byId["drop"].dispatch("drop", {
+    preventDefault() {},
+    dataTransfer: { files: [{ name: "x.3mf", b64: "AA" }] },
+  });
+  assert(!byId["drop"].classList.contains("over"),
+         "the highlight survived the drop");
+});
+must("choosing a file opens the picker", () => {
+  var opened = false;
+  byId["file"].click = function () { opened = true; };
+  byId["browse"].dispatch("click", { preventDefault() {} });
+  assert(opened, "the picker was not opened");
+});
+must("a file chosen through the picker takes the same route", () => {
+  sent.length = 0;
+  byId["file"].dispatch("change", { target: { files: [{ name: "picked.3mf", b64: "QUJD" }] } });
+  var msg = sent.filter(m => m.type === "convert_data")[0];
+  assert(msg && msg.name === "picked.3mf" && msg.data === "QUJD",
+         "posted: " + JSON.stringify(sent));
+});
+
+console.log("\nWhat the conversion reports");
+must("the report names the plates, the tools and the machine G-code", () => {
+  deliver({ type: "report", path: "/tmp/x.3mf", opened: true,
+    report: { printer: "Flashforge Creator 5 Pro", source_printer: "Bambu Lab P1P",
+              kept: 12, replaced: 9, dropped: 3,
+              kept_examples: ["layer_height"],
+              plates: [{ index: "1", filaments: [
+                { type: "PLA", colour: "#FF0000", used_g: "12.5" }] }],
+              filaments: [{ tool: 1, type: "PLA", colour: "#FF0000",
+                            profile: "Flashforge PLA" }],
+              gcode: [{ which: "start", lines: 42,
+                        head: ["G28", "G1 Z5 F600"] }] } });
+  var html = byId["report"].innerHTML;
+  assert(html.indexOf("plate 1") >= 0, "no plate row: " + html);
+  assert(html.indexOf("12.5 g") >= 0, "no filament weight: " + html);
+  assert(html.indexOf("tool 1") >= 0, "no tool row: " + html);
+  assert(html.indexOf("Flashforge PLA") >= 0, "no filament profile: " + html);
+  assert(html.indexOf("42 line") >= 0, "no G-code line count: " + html);
+  assert(html.indexOf("G28") >= 0, "no G-code head: " + html);
+});
+must("a file with no plates or G-code still reports cleanly", () => {
+  deliver({ type: "report", path: "/tmp/x.3mf", opened: true,
+    report: { printer: "P", source_printer: "S", kept: 1, replaced: 1, dropped: 0,
+              kept_examples: [], plates: [], filaments: [], gcode: [] } });
+  var html = byId["report"].innerHTML;
+  assert(html.indexOf("Saved as") >= 0, "the saved path went missing: " + html);
 });
 
 check("no null-element lookups fired during the run", errors.length === 0,
