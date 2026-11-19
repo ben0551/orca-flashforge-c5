@@ -430,6 +430,18 @@ def main():
             check("the send card carries the how-to",
                   "Slicing Pipeline Plugin" in ui
                   and "Capture last slice" in ui)
+            # The instruction has to name the controls the user actually sees,
+            # or it just relocates the hunt.
+            check("the how-to names the mode switch and the search box",
+                  "Advanced settings" in ui and "Search in preset" in ui,
+                  "the steps do not say where to click")
+            # A file input carries its own intrinsic width; without a guard it
+            # pushes the whole docked panel sideways and clips the text beside
+            # it, and a fixed label column then truncates the picker itself.
+            check("the page survives a docked-narrow panel",
+                  "input[type=file]{width:100%" in ui
+                  and "@media (max-width:540px)" in ui,
+                  "no guard against the file picker's intrinsic width")
             source = open(os.path.join(workdir, "flashforge-c5_any.py"),
                           encoding="utf-8").read()
             check("the invented setting name appears nowhere in the plugin",

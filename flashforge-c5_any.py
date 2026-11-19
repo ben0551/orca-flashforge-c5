@@ -804,6 +804,13 @@ PAGE = r"""
   input[type=text],input[type=number],select{background:#1b1c1f;color:var(--fg);
         border:1px solid var(--line);border-radius:5px;padding:5px 7px;font-size:12px}
   input[type=text]{width:100%}
+  /* A file input keeps its own intrinsic width, which is wider than the column
+     it sits in once the panel is docked narrow — it then pushes the whole page
+     sideways and clips the text beside it. Let it shrink instead. */
+  input[type=file]{width:100%;max-width:100%;min-width:0;font-size:12px;color:var(--dim)}
+  .grid2>*{min-width:0}
+  .grid2 ol{margin:0;padding-left:18px}
+  .grid2 li{margin-bottom:3px}
   label.chk{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--dim)}
   .kv{display:flex;justify-content:space-between;padding:2px 0;font-size:12px}
   .kv span:first-child{color:var(--dim)}
@@ -834,6 +841,14 @@ PAGE = r"""
   .noz .t{font-size:11px;color:var(--dim)}
   .noz .v{font-size:14px;font-weight:600}
   .grid2{display:grid;grid-template-columns:130px 1fr;gap:7px 9px;align-items:center}
+  /* Docked narrow, a fixed 130px label column leaves too little for the value:
+     the file picker truncates to "No fi…sen" and the help text becomes a
+     sliver. Stack the pairs instead of squeezing them. */
+  @media (max-width:540px){
+    .grid2{grid-template-columns:1fr;gap:3px}
+    .grid2 label:not(.chk){margin-top:6px}
+    .grid2>span{display:none}
+  }
   .dim{color:var(--dim)} .small{font-size:11px}
 </style>
 <div id="wrap">
@@ -885,12 +900,20 @@ PAGE = r"""
       <button id="blast">Send last OrcaSlicer slice</button>
       <span class="small dim" id="lastinfo">no slice captured yet</span>
     </div>
-    <div class="small dim" id="lasthint" style="margin-bottom:9px">
-      To send the slice you just made without leaving OrcaSlicer, add <b>Capture last slice</b>
-      to your process preset: <b>Process settings</b>, search for
-      <b>Slicing Pipeline Plugin</b>, and pick it. That setting is hidden unless the process
-      visibility is <b>Advanced</b>. Otherwise, choose a Model file below, or reprint one from
-      Files on the printer.
+    <div class="small" id="lasthint" style="margin-bottom:9px">
+      <b>One-click send needs a single setting switched on (optional).</b>
+      <ol style="margin:5px 0 5px 18px; padding:0">
+        <li>Open the <b>Process</b> tab of the settings panel — the one beside
+          <b>Printer</b> and <b>Filament</b>.</li>
+        <li>Set the settings-mode switch at the top of that panel to
+          <b>Advanced settings</b>. It has three positions (Simple, Advanced, Expert);
+          if it is greyed out you are in Developer mode, which already shows
+          everything.</li>
+        <li>Type <b>Slicing Pipeline Plugin</b> into the <b>Search in preset</b> box.</li>
+        <li>Click its value box and choose <b>Capture last slice</b> from the list.</li>
+      </ol>
+      <span class="dim">Skipping this is fine — choose a <b>Model file</b> below, or reprint one
+      from <b>Files on the printer</b>.</span>
     </div>
     <div class="grid2">
       <label class="chk" for="bfile">Model file</label>
@@ -1553,9 +1576,9 @@ class FlashForgePage(orca.pages.PagesPluginCapabilityBase):
         path = LAST_SLICE.get("path")
         if not path or not os.path.exists(path):
             self.post_message({"type": "error",
-                               "message": "Nothing captured yet — add 'Capture last slice' "
-                                          "to the process preset (search for 'Slicing "
-                                          "Pipeline Plugin'), or choose a Model file below."})
+                               "message": "Nothing captured yet — set 'Slicing Pipeline "
+                                          "Plugin' in your process preset (steps above), "
+                                          "or choose a Model file below."})
             return
         ensure_spools()
         tools = staged_tools(path)

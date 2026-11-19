@@ -57,11 +57,18 @@ with no third-party dependencies — nothing is downloaded at plugin load time.
 
 5. Optional — one-click send of the slice you just made. **Send last OrcaSlicer
    slice** only has something to send once the plugin's capture capability is
-   attached to your process preset: open **Process settings**, search for
-   **Slicing Pipeline Plugin**, and pick **Capture last slice** from the picker.
-   That setting is only visible when the process visibility is **Advanced** (or
-   Expert), which is why it is easy to conclude it does not exist. Without it,
-   pick a model file in the tab instead — that path always works.
+   attached to your process preset:
+
+   1. Open the **Process** tab of the settings panel — the one beside
+      **Printer** and **Filament**.
+   2. Set the settings-mode switch at the top of that panel to **Advanced
+      settings**. It has three positions (Simple, Advanced, Expert); if it is
+      greyed out you are in Developer mode, which already shows everything.
+   3. Type **Slicing Pipeline Plugin** into the **Search in preset** box.
+   4. Click its value box and choose **Capture last slice** from the list.
+
+   Skipping this is fine — pick a model file in the tab instead, which is the
+   path that always works.
 
 ## Using the tab
 
