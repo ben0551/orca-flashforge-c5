@@ -46,7 +46,7 @@ page.
 
 **Name:** FlashForge Creator 5
 
-**Types:** three capabilities — Pages, Slicing Pipeline, Printer Connection. See
+**Types:** two capabilities — Pages and Printer Connection. See
 *Capability types and the hub* below: a plugin is not listed under one type.
 
 **Compatible OrcaSlicer:** 2.5.0 or newer
@@ -62,9 +62,9 @@ page.
 > firmware hides the printer behind its own cloud app, so OrcaSlicer will not send
 > to it or show its status. This plugin talks to the printer's own local API on
 > port 8898 instead: a FlashForge C5 tab with live status, temperatures, the
-> 4-slot material station, job control, the files already on the printer, and a
-> send-to-print panel with a per-tool spool picker — plus a printer agent so
-> OrcaSlicer's own Send and Print buttons work too. Nothing leaves your LAN.
+> 4-slot material station, job control, and the files already on the printer with
+> a plate preview and one-click reprint — plus a printer agent so OrcaSlicer's own
+> Send and Print buttons work too. Nothing leaves your LAN.
 
 **Long description**
 
@@ -77,14 +77,14 @@ page.
 >
 > - **FlashForge C5 tab** — live print status and progress, nozzle and bed
 >   temperatures, the 4-slot material station with the colour loaded in each slot,
->   pause / resume / cancel, chamber light and clear-platform, a browser for the
->   files already on the printer with one-click reprint, and a send-to-print panel.
-> - **A real spool picker** — picking a file reads the tool list out of the 3MF and
->   offers a slot per tool, pre-selecting the nearest loaded colour and telling you
->   which substitution it made. Override any row before sending.
+>   pause / resume / cancel, chamber light and clear-platform, and a browser for
+>   the files already on the printer with a plate preview and one-click reprint.
+> - **Plate previews** — the firmware keeps a thumbnail beside every stored job
+>   and serves it from its own `/gcodeThumb` route; the tab fetches it so you can
+>   see what a file is before reprinting it.
 > - **OrcaSlicer's own buttons** — a printer agent so **Send to printer** and
 >   **Print** work directly (needs OrcaSlicer's experimental "use printer agents"
->   preference).
+>   preference). This is the sending path.
 >
 > **Two things it handles that the raw API does not**
 >
@@ -112,9 +112,10 @@ shows *one row per registered capability*, each with its own enable checkbox and
 its own type label. The types are **Script**, **Slicing Pipeline**, **Printer
 Connection**, **Pages**, and **Resource Texture** packs.
 
-So this plugin presents three rows: Pages (the FlashForge C5 tab), Slicing
-Pipeline (the slice capture), and Printer Connection (the printer agent). There is
-nothing to choose and nothing to match.
+So this plugin presents two rows: Pages (the FlashForge C5 tab) and Printer
+Connection (the printer agent). Neither appears in the listing dropdown, so there
+is nothing to match and nothing to contort — the dropdown describes a narrower set
+than the capability system supports.
 
 The printer-agent type is not even ours to set: `PrinterAgentBase.get_type()`
 already returns `orca.PluginType.PrinterConnection` (`"printer-connection"`) and

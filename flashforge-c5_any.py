@@ -9,17 +9,14 @@ send prints to it or show its status. This plugin closes that gap by speaking th
 printer's own LAN protocol from inside OrcaSlicer, and by registering a printer
 agent so OrcaSlicer's own Send / Print buttons work too.
 
-Three capabilities, registered by one plugin:
+Two capabilities, registered by one plugin:
 
 * ``FlashForge C5`` tab (Pages) - live status, temperatures, material station,
-  job control, a file browser for what is already on the printer, and a
-  send-to-print panel. This is the interface described in the brief.
-* ``Capture last slice`` (SlicingPipeline) - remembers the G-code OrcaSlicer just
-  exported, so the tab can send it with one click. Needs selecting in the process
-  preset (see README).
+  job control, and a file browser for what is already on the printer, with
+  reprint. This is the interface described in the brief.
 * ``FlashForge Creator 5`` (PrinterAgent) - makes OrcaSlicer's native Send to
-  printer / Print buttons work against the Creator 5, so no tab interaction is
-  needed at all for the common "slice then print" flow.
+  printer / Print buttons work against the Creator 5, so printing stays the
+  ordinary OrcaSlicer flow and the tab is there to watch and drive the machine.
 
 Only the Python standard library is used, so nothing has to be downloaded at
 plugin load time.
@@ -95,7 +92,6 @@ def _default_settings():
         "port": int(os.environ.get("FFC5_PORT", DEFAULT_API_PORT)),
         "serial": os.environ.get("FFC5_SERIAL", ""),
         "check_code": os.environ.get("FFC5_CHECK_CODE", ""),
-        "leveling": True,
         "poll_seconds": 3,
     }
 
@@ -111,8 +107,7 @@ def load_settings():
             with open(SETTINGS_FILE, "r", encoding="utf-8") as fh:
                 stored = json.load(fh)
             if isinstance(stored, dict):
-                for key in ("host", "serial", "check_code", "port",
-                            "leveling", "poll_seconds"):
+                for key in ("host", "serial", "check_code", "port", "poll_seconds"):
                     if stored.get(key) not in (None, ""):
                         data[key] = stored[key]
         except FileNotFoundError:
@@ -128,7 +123,7 @@ def save_settings(update):
     """Merge `update` into settings.json. Returns (ok, error_or_None)."""
     global _SETTINGS_CACHE
     current = load_settings()
-    for key in ("host", "serial", "check_code", "port", "leveling", "poll_seconds"):
+    for key in ("host", "serial", "check_code", "port", "poll_seconds"):
         if key in update and update[key] is not None:
             current[key] = update[key]
     current["port"] = int(current.get("port") or DEFAULT_API_PORT)
@@ -259,6 +254,25 @@ class Creator5:
         return detail if isinstance(detail, dict) else {}
 
     # -- files -------------------------------------------------------------- #
+
+    def thumbnail(self, filename, timeout=20):
+        """The plate preview the printer keeps beside a stored file, as PNG bytes.
+
+        This is the only thing that can be read back out of the printer: its
+        entire HTTP API is product / control / detail / uploadGcode / gcodeList /
+        printGcode plus this one image route, so a stored file cannot be
+        downloaded. A preview is what makes one identifiable before reprinting.
+        """
+        data = self._unwrap(self._post("/gcodeThumb", {"fileName": filename},
+                                       timeout=timeout), "/gcodeThumb")
+        image = data.get("imageData") or ""
+        if not image:
+            raise PrinterError(data.get("message")
+                               or "The printer has no preview for that file")
+        try:
+            return base64.b64decode(image)
+        except Exception as exc:
+            raise PrinterError(f"Unreadable preview image: {exc}")
 
     def gcode_list(self, timeout=15):
         data = self._unwrap(self._post("/gcodeList", timeout=timeout), "/gcodeList")
@@ -496,35 +510,6 @@ def normalize_detail(d):
     }
 
 
-def nearest_slot(spools, color):
-    """Index of the loaded slot whose colour is closest to `color` (or None)."""
-    def rgb(value):
-        text = str(value or "").lstrip("#")
-        if len(text) == 6:
-            try:
-                return tuple(int(text[i:i + 2], 16) for i in (0, 2, 4))
-            except ValueError:
-                pass
-        return None
-
-    want = rgb(color)
-    best, best_d = None, None
-    for slot in spools:
-        if not slot.get("loaded"):
-            continue
-        have = rgb(slot.get("color"))
-        if want is None or have is None:
-            if best is None:
-                best = slot["id"]
-            continue
-        dist = sum((a - b) ** 2 for a, b in zip(want, have))
-        if best_d is None or dist < best_d:
-            best, best_d = slot["id"], dist
-    if best is None and spools:
-        best = spools[0]["id"]
-    return best
-
-
 # Named colours for the spool picker, as (hue in degrees, name). Hue is circular
 # and matches how people read a colour: #0057B8 is a blue, not a teal, even
 # though plain RGB distance says otherwise.
@@ -583,49 +568,8 @@ def color_name(value):
 
 
 # --------------------------------------------------------------------------- #
-# Staged-file inspection
+# File naming: what the printer ends up calling the file
 # --------------------------------------------------------------------------- #
-
-def staged_tools(path):
-    """Tools a staged file needs, as [{"tool":1,"material":"PLA","color":"#fff"}].
-
-    A `.3mf` carries `Metadata/slice_info.config` with one `<filament>` element
-    per tool. A plain `.gcode` carries no tool metadata at all — and mappings are
-    ignored by the printer for plain G-code anyway — so the list comes back empty.
-    """
-    if not path or not os.path.exists(path):
-        return []
-    try:
-        if zipfile.is_zipfile(path):
-            with zipfile.ZipFile(path) as bundle:
-                names = [n for n in bundle.namelist()
-                         if n.endswith("slice_info.config")]
-                if not names:
-                    return []
-                root = ET.fromstring(bundle.read(names[0]))
-        else:
-            with open(path, "r", encoding="utf-8", errors="replace") as fh:
-                head = fh.read(65536)
-            marker = head.find("<!-- slice_info")
-            if marker < 0:
-                return []
-            end = head.find("-->", marker)
-            root = ET.fromstring(head[marker + 4:end])
-    except Exception:
-        return []
-
-    tools = []
-    for node in root.iter("filament"):
-        tool_id = int(_num(node.get("id"), 0))
-        tools.append({
-            "tool": tool_id,
-            "material": (node.get("type") or "").upper(),
-            "color": node.get("color") or "",
-            "used_g": _num(node.get("used_g"), 0.0),
-        })
-    tools.sort(key=lambda t: t["tool"])
-    return tools
-
 
 def printer_name(name):
     """The filename the printer ends up with, given an export name.
@@ -754,8 +698,6 @@ class Runtime:
 
 
 RUNTIME = Runtime()
-# Set by the slicing-pipeline capability so the tab can one-click send a slice.
-LAST_SLICE = {"path": None, "when": 0.0, "name": ""}
 
 
 # --------------------------------------------------------------------------- #
@@ -836,6 +778,7 @@ PAGE = r"""
   .frow:last-child{border-bottom:none}
   .fname{flex:1;font-size:12px;word-break:break-all}
   .fmeta{font-size:11px;color:var(--dim)}
+  .fbtns{display:flex;gap:6px;flex-shrink:0}
   .nozzles{display:flex;gap:8px;flex-wrap:wrap}
   .noz{background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:6px 9px;min-width:82px}
   .noz .t{font-size:11px;color:var(--dim)}
@@ -895,53 +838,25 @@ PAGE = r"""
   </div>
 
   <div class="card">
-    <h3>Send a print</h3>
-    <div class="row" style="margin-bottom:8px">
-      <button id="blast">Send last OrcaSlicer slice</button>
-      <span class="small dim" id="lastinfo">no slice captured yet</span>
-    </div>
-    <div class="small" id="lasthint" style="margin-bottom:9px">
-      <b>One-click send needs a single setting switched on (optional).</b>
-      <ol style="margin:5px 0 5px 18px; padding:0">
-        <li>Open the <b>Process</b> tab of the settings panel — the one beside
-          <b>Printer</b> and <b>Filament</b>.</li>
-        <li>Set the settings-mode switch at the top of that panel to
-          <b>Advanced settings</b>. It has three positions (Simple, Advanced, Expert);
-          if it is greyed out you are in Developer mode, which already shows
-          everything.</li>
-        <li>Type <b>Slicing Pipeline Plugin</b> into the <b>Search in preset</b> box.</li>
-        <li>Click its value box and choose <b>Capture last slice</b> from the list.</li>
-      </ol>
-      <span class="dim">Skipping this is fine — choose a <b>Model file</b> below, or reprint one
-      from <b>Files on the printer</b>.</span>
-    </div>
-    <div class="grid2">
-      <label class="chk" for="bfile">Model file</label>
-      <div>
-        <input type="file" id="bfile" accept=".gcode,.3mf,.gx,.gcode.3mf">
-        <div class="small dim" id="finfo">OrcaSlicer writes .gcode.3mf bundles; the plugin
-          strips the bundle down to the G-code the printer can actually start.</div>
-      </div>
-      <span></span>
-      <label class="chk"><input type="checkbox" id="clevel" checked> Bed levelling before print</label>
-    </div>
-    <div id="mapwrap" class="hidden" style="margin-top:9px">
-      <div class="small dim" style="margin-bottom:5px">Which spool feeds each tool — check this,
-        the default is only a nearest-colour guess.</div>
-      <div class="tools" id="tools"></div>
-    </div>
-    <div class="row" style="margin-top:10px">
-      <button id="bsend" disabled>Send only</button>
-      <button id="bsendprint" class="primary" disabled>Send &amp; print</button>
-    </div>
-    <div id="upwrap" class="hidden" style="margin-top:8px">
-      <div class="bar"><i id="upbar"></i></div>
-      <div class="small dim" id="uplabel" style="margin-top:4px"></div>
+    <h3>Sending a print</h3>
+    <div class="small dim">
+      Slice a model, then use OrcaSlicer's own <b>Send to printer</b> / <b>Print</b> button on
+      the preview screen. This plugin supplies the printer agent behind that button, so the
+      Creator 5 behaves like any built-in target — there is nothing to set up on this tab.
     </div>
   </div>
 
   <div class="card">
     <h3>Files on the printer</h3>
+    <div id="upwrap" class="hidden" style="margin-bottom:8px">
+      <div class="bar"><i id="upbar"></i></div>
+      <div class="small dim" id="uplabel" style="margin-top:4px"></div>
+    </div>
+    <div id="prevwrap" class="hidden" style="margin-bottom:8px">
+      <div class="small dim" id="prevname" style="margin-bottom:4px"></div>
+      <img id="previmg" alt="plate preview"
+           style="width:110px;height:110px;image-rendering:auto;border:1px solid var(--line);border-radius:6px;background:#141518">
+    </div>
     <div class="files" id="files"><span class="dim small">loading…</span></div>
   </div>
 
@@ -1033,12 +948,6 @@ PAGE = r"""
     if (m > 0) { return m + "m " + s + "s"; }
     return s + "s";
   }
-  function fmtSize(n){
-    n = Number(n) || 0;
-    if (n > 1048576) { return (n / 1048576).toFixed(1) + " MB"; }
-    if (n > 1024) { return (n / 1024).toFixed(0) + " KB"; }
-    return n + " B";
-  }
   function esc(s){
     return String(s == null ? "" : s)
       .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
@@ -1046,8 +955,8 @@ PAGE = r"""
   }
   function post(obj){ orca.postMessage(obj); }
 
-  var state = { spools: [], status: null, staged: null, cfg: null, files: [] };
-  var pollTimer = null, uploadTimer = null, stagedFile = null, stageSent = 0;
+  var state = { spools: [], status: null, cfg: null, files: [] };
+  var pollTimer = null, uploadTimer = null;
 
   // ---- rendering -------------------------------------------------------- //
 
@@ -1086,7 +995,6 @@ PAGE = r"""
 
     state.spools = s.spools || [];
     paintSpools();
-    paintPicker();
   }
 
   function paintSpools(){
@@ -1114,39 +1022,6 @@ PAGE = r"""
     $("spools").innerHTML = out;
   }
 
-  function slotOptions(selected){
-    var out = "";
-    var spools = state.spools || [];
-    for (var i = 0; i < spools.length; i++) {
-      var s = spools[i];
-      if (!s.loaded) { continue; }
-      var label = "Slot " + s.id + " — " + (s.material || "?") +
-                  (s.color_name ? (" (" + s.color_name + ")") : "");
-      out += '<option value="' + esc(s.id) + '"' +
-             (String(s.id) === String(selected) ? " selected" : "") + '>' +
-             esc(label) + '</option>';
-    }
-    if (!out) { out = '<option value="">no loaded spools</option>'; }
-    return out;
-  }
-
-  function paintPicker(){
-    var tools = (state.staged && state.staged.tools) || [];
-    var wrap = $("mapwrap");
-    if (!tools.length) { wrap.className = "hidden"; $("tools").innerHTML = ""; return; }
-    var out = "";
-    for (var i = 0; i < tools.length; i++) {
-      var t = tools[i];
-      var sw = t.color ? t.color : "#555";
-      out += '<div class="tool"><div class="t">Tool ' + t.tool + ' · ' +
-             esc(t.material || "?") + '</div>' +
-             '<div class="sw" style="background:' + esc(sw) + '"></div>' +
-             '<select data-tool="' + t.tool + '">' + slotOptions(t.suggested) + '</select></div>';
-    }
-    $("tools").innerHTML = out;
-    wrap.className = "";
-  }
-
   function paintFiles(files, detail){
     state.files = files || [];
     if (!state.files.length) {
@@ -1162,16 +1037,27 @@ PAGE = r"""
     for (var j = 0; j < state.files.length; j++) {
       var name = state.files[j];
       var d = meta[name] || {};
-      var sub = d.printingTime ? (" · " + d.printingTime) : "";
-      if (d.totalFilamentWeight) { sub += " · " + d.totalFilamentWeight + " g"; }
+      var bits = [];
+      if (d.printingTime) { bits.push(fmtDur(d.printingTime)); }
+      if (d.totalFilamentWeight) {
+        bits.push(Number(d.totalFilamentWeight).toFixed(1) + " g");
+      }
       out += '<div class="frow"><div class="fname">' + esc(name) +
-             '<div class="fmeta">stored on printer' + esc(sub) + '</div></div>' +
-             '<button data-reprint="' + esc(name) + '">Reprint</button></div>';
+             '<div class="fmeta">' + (bits.length ? esc(bits.join(" \u00b7 "))
+                                                  : "stored on printer") +
+             '</div></div><div class="fbtns">' +
+             '<button data-preview="' + esc(name) + '">Preview</button>' +
+             '<button data-reprint="' + esc(name) + '">Reprint</button>' +
+             '</div></div>';
     }
     $("files").innerHTML = out;
     var btns = $("files").querySelectorAll("button[data-reprint]");
     for (var k = 0; k < btns.length; k++) {
       btns[k].addEventListener("click", onReprint);
+    }
+    var prevs = $("files").querySelectorAll("button[data-preview]");
+    for (var q = 0; q < prevs.length; q++) {
+      prevs[q].addEventListener("click", onPreview);
     }
   }
 
@@ -1182,7 +1068,6 @@ PAGE = r"""
     $("serial").value = cfg.serial || "";
     $("code").value   = cfg.check_code || "";
     $("poll").value   = cfg.poll_seconds || 3;
-    $("clevel").checked = cfg.leveling !== false;
     // Until an address is set this panel is the only thing that matters, so it
     // must not be the sixth card below the fold. Once configured it drops back
     // to the end, out of the way.
@@ -1202,54 +1087,11 @@ PAGE = r"""
   }
 
   function setJobRunning(on){
-    var ids = ["bsend", "bsendprint", "blast"];
-    for (var i = 0; i < ids.length; i++) { $(ids[i]).disabled = !!on; }
+    // Reprint is the only action the tab still starts itself, so it is the one
+    // that gets locked while a job runs.
+    var btns = $("files").querySelectorAll("button[data-reprint]");
+    for (var i = 0; i < btns.length; i++) { btns[i].disabled = !!on; }
   }
-
-  // ---- upload: read the chosen file into the plugin, in chunks ---------- //
-  //
-  // The bytes never go to the printer directly: the plugin stages them in a temp
-  // file so it can read the tool list out of the 3MF and show a real spool
-  // picker. Pacing is ack-driven — the plugin acknowledges each chunk and only
-  // then is the next one read, so a slow disk or a big file cannot flood the
-  // message bridge.
-
-  function readChunk(blob, start, end, cb){
-    var reader = new FileReader();
-    reader.onload = function(){
-      var bytes = new Uint8Array(reader.result);
-      var bin = "";
-      var STRIDE = 8192;
-      for (var i = 0; i < bytes.length; i += STRIDE) {
-        bin += String.fromCharCode.apply(null, bytes.subarray(i, i + STRIDE));
-      }
-      cb(btoa(bin));
-    };
-    reader.onerror = function(){ showBanner("Could not read the file", "err"); };
-    reader.readAsArrayBuffer(blob.slice(start, end));
-  }
-
-  function stageFile(file){
-    stagedFile = file;
-    stageSent = 0;
-    $("upwrap").className = "";
-    $("upbar").style.width = "0%";
-    $("uplabel").textContent = "Reading " + file.name + "…";
-    $("bsend").disabled = true;
-    $("bsendprint").disabled = true;
-    post({ type: "stage_begin", name: file.name, size: file.size });
-  }
-
-  function sendChunkFrom(offset){
-    if (!stagedFile || offset >= stagedFile.size) { return; }
-    var end = Math.min(offset + 524288, stagedFile.size);
-    readChunk(stagedFile, offset, end, function(b64){
-      stageSent = end;
-      post({ type: "stage_chunk", seq: offset, data: b64 });
-    });
-  }
-
-  function fileChunksReset(){ stagedFile = null; stageSent = 0; }
 
   // ---- events ----------------------------------------------------------- //
 
@@ -1258,6 +1100,20 @@ PAGE = r"""
     if (!name) { return; }
     showBanner("Starting " + name + "…", "info");
     post({ type: "reprint", filename: name });
+    startJobPoll();
+  }
+
+  // A stored file cannot be fetched back off the printer — its API has no
+  // download route — so the plate thumbnail the device keeps beside the file is
+  // the only way to see what it is before reprinting it.
+  function onPreview(ev){
+    var name = ev.currentTarget.getAttribute("data-preview");
+    if (!name) { return; }
+    var wrap = $("prevwrap");
+    $("prevname").textContent = "Loading the preview…";
+    $("previmg").removeAttribute("src");
+    wrap.className = "";
+    post({ type: "preview", filename: name });
   }
 
   function wire(){
@@ -1268,19 +1124,6 @@ PAGE = r"""
              check_code: $("code").value.trim(),
              poll_seconds: Number($("poll").value) || 3 });
     });
-    $("bfile").addEventListener("change", function(){
-      var f = $("bfile").files && $("bfile").files[0];
-      state.staged = null;
-      $("mapwrap").className = "hidden";
-      $("bsend").disabled = true;
-      $("bsendprint").disabled = true;
-      if (!f) { $("finfo").textContent = "No file chosen."; return; }
-      $("finfo").textContent = f.name + " — " + fmtSize(f.size);
-      stageFile(f);
-    });
-    $("bsend").addEventListener("click", function(){ clickSend(false); });
-    $("bsendprint").addEventListener("click", function(){ clickSend(true); });
-    $("blast").addEventListener("click", function(){ post({ type: "send_last" }); });
 
     $("bpause").addEventListener("click", function(){ post({ type: "control", action: "pause" }); });
     $("bresume").addEventListener("click", function(){ post({ type: "control", action: "resume" }); });
@@ -1294,37 +1137,14 @@ PAGE = r"""
     $("poll").addEventListener("change", schedule);
   }
 
-  function clickSend(alsoPrint){
-    if (!state.staged) {
-      showBanner("Pick a model file above, or capture a slice with 'Send last "
-                 + "OrcaSlicer slice'.", "err");
-      return;
-    }
-    var f = $("bfile").files && $("bfile").files[0];
-    if (f && state.staged.name !== f.name) {
-      showBanner("Still reading " + f.name + " — one moment.", "info");
-      return;
-    }
-    commit(alsoPrint);
-  }
-
-  function currentMappings(){
-    var sel = $("tools").querySelectorAll("select[data-tool]");
-    var out = [];
-    for (var i = 0; i < sel.length; i++) {
-      out.push({ tool: Number(sel[i].getAttribute("data-tool")),
-                 slot: Number(sel[i].value) });
-    }
-    return out;
-  }
-
-  function commit(alsoPrint){
+  // Starting a reprint is the only job this tab kicks off itself, so that is
+  // what polls for progress. Sending a fresh slice is OrcaSlicer's own button,
+  // and its progress belongs to OrcaSlicer.
+  function startJobPoll(){
     setJobRunning(true);
     $("upwrap").className = "";
     $("upbar").style.width = "0%";
-    $("uplabel").textContent = "Sending to the printer…";
-    post({ type: "commit", print: !!alsoPrint, leveling: $("clevel").checked,
-           mappings: currentMappings() });
+    $("uplabel").textContent = "Starting the print…";
     if (uploadTimer) { clearInterval(uploadTimer); }
     uploadTimer = setInterval(function(){ post({ type: "job_status" }); }, 500);
   }
@@ -1343,32 +1163,15 @@ PAGE = r"""
     switch (m.type) {
       case "state":
         paint(m.status);
-        $("lastinfo").textContent = m.last_slice
-          ? ("last slice: " + m.last_slice + " — ready to send")
-          : "no slice captured yet";
-        // The how-to is long, and a banner cannot hold it or stay put. Show it in
-        // the card for as long as the button would refuse the click.
-        $("lasthint").style.display = m.last_slice ? "none" : "block";
         $("stt").textContent = (m.status && m.status.status) || "unknown";
         showSetupBanner(!!m.needs_setup);
         break;
       case "cfg":   paintCfg(m.cfg); break;
       case "files": paintFiles(m.files, m.detail); break;
-      case "staged":
-        state.staged = { name: m.name, tools: m.tools || [] };
-        paintPicker();
-        $("upwrap").className = "hidden";
-        setJobRunning(false);
-        showBanner("Ready — " + m.name + " inspected. Check the spool mapping, then send.",
-                   "ok");
-        break;
-      case "stage_ack":
-        if (stagedFile && Number(m.seq) === stageSent) {
-          var pct = Math.round(100 * stageSent / Math.max(1, stagedFile.size));
-          $("upbar").style.width = pct + "%";
-          $("uplabel").textContent = "Reading " + stagedFile.name + " — " + pct + "%";
-          sendChunkFrom(stageSent);
-        }
+      case "preview":
+        $("prevname").textContent = m.filename;
+        $("previmg").src = m.image;
+        $("prevwrap").className = "";
         break;
       case "job":
         $("upbar").style.width = Math.round((m.pct || 0) * 100) + "%";
@@ -1381,7 +1184,6 @@ PAGE = r"""
           } else if (m.result) {
             showBanner(m.result, "ok");
           }
-          fileChunksReset();
           $("upwrap").className = "hidden";
           post({ type: "files" });
         }
@@ -1429,10 +1231,7 @@ class FlashForgePage(orca.pages.PagesPluginCapabilityBase):
                 "status": self._status,
                 "files": self._files,
                 "save_cfg": self._save_cfg,
-                "stage_begin": self._stage_begin,
-                "stage_chunk": self._stage_chunk,
-                "commit": self._commit,
-                "send_last": self._send_last,
+                "preview": self._preview,
                 "reprint": self._reprint,
                 "control": self._control,
                 "job_status": self._job_status,
@@ -1461,7 +1260,6 @@ class FlashForgePage(orca.pages.PagesPluginCapabilityBase):
             "type": "state",
             "status": status or {"name": "FlashForge", "status": "offline",
                                  "progress": 0, "nozzles": [], "spools": []},
-            "last_slice": LAST_SLICE.get("name") or None,
             "needs_setup": needs_setup,
         })
         if error and not needs_setup:
@@ -1486,6 +1284,17 @@ class FlashForgePage(orca.pages.PagesPluginCapabilityBase):
                 tool["color_name"] = color_name(tool.get("materialColor"))
         self.post_message({"type": "files", "files": names, "detail": detail})
 
+    def _preview(self, msg):
+        filename = str(msg.get("filename") or "").strip()
+        if not filename:
+            return
+        png = RUNTIME.client().thumbnail(filename)
+        self.post_message({
+            "type": "preview",
+            "filename": filename,
+            "image": "data:image/png;base64," + base64.b64encode(png).decode("ascii"),
+        })
+
     def _save_cfg(self, msg):
         ok, error = save_settings({
             "host": (msg.get("host") or "").strip(),
@@ -1500,100 +1309,6 @@ class FlashForgePage(orca.pages.PagesPluginCapabilityBase):
             return
         self.post_message({"type": "cfg", "cfg": load_settings()})
         self._status({})
-
-    def _stage_begin(self, msg):
-        name = os.path.basename(str(msg.get("name") or "model.gcode"))
-        size = int(msg.get("size") or 0)
-        os.makedirs(STAGING_DIR, exist_ok=True)
-        path = os.path.join(STAGING_DIR, f"{uuid.uuid4().hex[:8]}-{name}")
-        handle = open(path, "wb")
-        ensure_spools()
-        RUNTIME.stage = {"path": path, "name": name, "size": size,
-                         "handle": handle, "received": 0, "tools": []}
-        self.post_message({"type": "stage_ack", "seq": 0})
-
-    def _stage_chunk(self, msg):
-        stage = RUNTIME.stage
-        if not stage or stage.get("handle") is None:
-            self.post_message({"type": "error",
-                               "message": "No file is being staged — pick a file again"})
-            return
-        blob = base64.b64decode(msg.get("data") or "")
-        stage["handle"].write(blob)
-        stage["received"] += len(blob)
-        if stage["received"] < stage["size"]:
-            self.post_message({"type": "stage_ack", "seq": stage["received"]})
-            return
-        stage["handle"].close()
-        stage["handle"] = None
-        tools = staged_tools(stage["path"])
-        spools = (RUNTIME.status or {}).get("spools") or []
-        for tool in tools:
-            tool["suggested"] = nearest_slot(spools, tool.get("color"))
-            tool["color_name"] = color_name(tool.get("color"))
-        stage["tools"] = tools
-        self.post_message({"type": "staged", "name": stage["name"], "tools": tools})
-
-    def _commit(self, msg):
-        stage = RUNTIME.stage
-        if not stage:
-            self.post_message({"type": "error",
-                               "message": "No file is staged — pick a file and click Send"})
-            return
-        print_now = bool(msg.get("print"))
-        leveling = bool(msg.get("leveling", True))
-        chosen = {int(m.get("tool") or 0): int(m.get("slot") or 0)
-                  for m in (msg.get("mappings") or [])}
-        path, name = stage["path"], stage["name"]
-        tools = stage["tools"] or []
-
-        def work(progress):
-            client = RUNTIME.client()
-            if not client.configured():
-                raise PrinterError("Printer address, serial or check code is missing "
-                                   "— fill in the connection panel")
-            progress(0.10, "Preparing the file…")
-            send_path, extracted = unwrap_for_printer(path, name)
-            note = ""
-            if extracted:
-                note = (f"OrcaSlicer bundles G-code inside {os.path.basename(path)}; "
-                        f"sent {os.path.basename(send_path)} instead, which the "
-                        f"Creator 5 can start.")
-            progress(0.30, "Uploading to the printer…")
-            client.upload(send_path, print_now=False, leveling=leveling)
-            filename = os.path.basename(send_path)
-            if print_now:
-                progress(0.75, "Starting the print…")
-                client.start_print(filename, mappings=mappings_for(client, tools, chosen),
-                                   leveling=leveling)
-            detail, _ = RUNTIME.refresh(force=True)
-            verb = "sent and printing" if print_now else "sent to the printer"
-            return f"{filename} {verb}. {note}".strip()
-
-        RUNTIME.start_job(work, "Sending…")
-
-    def _send_last(self, msg):
-        path = LAST_SLICE.get("path")
-        if not path or not os.path.exists(path):
-            self.post_message({"type": "error",
-                               "message": "Nothing captured yet — set 'Slicing Pipeline "
-                                          "Plugin' in your process preset (steps above), "
-                                          "or choose a Model file below."})
-            return
-        ensure_spools()
-        tools = staged_tools(path)
-        spools = (RUNTIME.status or {}).get("spools") or []
-        for tool in tools:
-            tool["suggested"] = nearest_slot(spools, tool.get("color"))
-        # Stage under the name the state advertised, so what the user was told
-        # is ready to send is what the printer is asked for.
-        name = LAST_SLICE.get("name") or os.path.basename(path)
-        RUNTIME.stage = {"path": path, "name": name, "size": 0,
-                         "handle": None, "received": 0, "tools": tools}
-        self.post_message({"type": "staged", "name": name, "tools": tools})
-        self.post_message({"type": "log",
-                           "message": f"Last slice {name} staged — "
-                                      f"check the spool mapping, then Send & print."})
 
     def _reprint(self, msg):
         filename = str(msg.get("filename") or "").strip()
@@ -1685,83 +1400,6 @@ class FlashForgePage(orca.pages.PagesPluginCapabilityBase):
         with RUNTIME.lock:
             job = dict(RUNTIME.job)
         self.post_message({"type": "job", **job})
-
-
-def ensure_spools():
-    """Populate the spool cache if the tab has not polled yet."""
-    if not (RUNTIME.status or {}).get("spools"):
-        RUNTIME.refresh()
-
-
-def mappings_for(client, tools, chosen):
-    """Build the printer's 5-field mapping per tool from the user's slot picks.
-
-    ``toolId`` is 0-based and ``slotId`` is 1-based; the older four-field shape is
-    silently ignored by the firmware, so keep these five keys exactly.
-    """
-    spools = {s.get("id"): s for s in ((RUNTIME.status or {}).get("spools") or [])}
-    if not spools:
-        try:
-            spools = {s["id"]: s for s in normalize_detail(client.detail())["spools"]}
-        except PrinterError:
-            spools = {}
-
-    rows = tools or []
-    if not rows:
-        # A plain .gcode carries no tool metadata. Map tool N to slot N so a
-        # single-colour print still names the spool it is actually drawn from.
-        rows = [{"tool": i + 1, "material": "", "color": ""}
-                for i in range(max(1, len(spools) or 1))]
-        if not spools:
-            rows = [{"tool": 1, "material": "", "color": ""}]
-
-    out = []
-    for row in rows:
-        tool_no = int(row.get("tool") or 1)
-        slot_id = chosen.get(tool_no) or row.get("suggested") or 1
-        spool = spools.get(slot_id) or {}
-        out.append({
-            "toolId": tool_no - 1,
-            "slotId": int(slot_id),
-            "materialName": spool.get("material") or row.get("material") or "PLA",
-            "toolMaterialColor": row.get("color") or spool.get("color") or "#FFFFFF",
-            "slotMaterialColor": spool.get("color") or "#FFFFFF",
-        })
-    return out
-
-
-# --------------------------------------------------------------------------- #
-# Capture the last slice
-# --------------------------------------------------------------------------- #
-
-class LastSliceCapture(orca.slicing.SlicingPipelineCapabilityBase):
-    """Remember the G-code OrcaSlicer just exported.
-
-    Needs enabling per process preset: add it to the ``slicing_pipeline_plugin``
-    setting (Process settings -> search "Slicing Pipeline Plugin", Advanced
-    visibility). Reading the file is allowed at this step because the export
-    folder is a pre-approved root for the duration of the call, so no permission
-    prompt appears.
-    """
-
-    def get_name(self):
-        return "Capture last slice"
-
-    def execute(self, ctx):
-        try:
-            if getattr(ctx, "step", None) != orca.slicing.Step.psGCodePostProcess:
-                return orca.ExecutionResult.success()
-            path = getattr(ctx, "gcode_path", None)
-            if path and os.path.exists(path):
-                LAST_SLICE["path"] = path
-                LAST_SLICE["when"] = time.time()
-                LAST_SLICE["name"] = printer_name(
-                    getattr(ctx, "output_name", None) or os.path.basename(path))
-            return orca.ExecutionResult.success("Captured for the FlashForge C5 tab")
-        except Exception as exc:
-            return orca.ExecutionResult.failure(
-                orca.PluginResult.RecoverableError,
-                f"Could not capture the slice: {type(exc).__name__}: {exc}")
 
 
 # --------------------------------------------------------------------------- #
@@ -2117,5 +1755,4 @@ class FlashForgeC5Plugin(orca.base):
             pass  # older builds may not expose the declaration
 
         orca.register_capability(FlashForgePage)
-        orca.register_capability(LastSliceCapture)
         orca.register_capability(FlashForgeAgent)

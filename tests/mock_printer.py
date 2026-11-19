@@ -5,11 +5,16 @@ the tests can assert on the *bytes and headers the printer would see* rather tha
 on the plugin's own idea of what it sent.
 """
 
+import base64
 import json
 import re
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
+
+# A real 8x8 PNG, the shape /gcodeThumb actually returns (base64 in imageData).
+PREVIEW_PNG_B64 = ("iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAI0lEQVR4nGNgIAAY"
+                   "GRgYGE6cOPEfm6SFhQUjEyETBoMCggAAeWwEDHRk95IAAAAASUVORK5CYII=")
 
 SPOOLS = [
     {"slotId": 1, "materialName": "PLA", "materialColor": "#FFFFFF", "hasFilament": True},
@@ -46,6 +51,7 @@ class MockPrinter:
         self.uploads = []          # {"headers": {...}, "filename":..., "bytes":...}
         self.prints = []           # /printGcode bodies
         self.controls = []         # /control payloads
+        self.thumbs = []           # filenames sent to /gcodeThumb
         self.auth_probe = []       # credentials seen on /detail
         self.fail_next_upload = False
         # Set by a test to make /control accept but never change anything, which
@@ -161,12 +167,28 @@ def make_handler(printer):
                             "detail": printer.detail()})
                 return
 
+            if path == "/gcodeThumb":
+                # The only read-back route the firmware has. Sending an
+                # unrecognised path is how a wrong guess looks: a 404.
+                name = body.get("fileName")
+                stored = [u["filename"] for u in printer.uploads]
+                if name not in stored:
+                    self._json({"code": 1, "message": "file not found"})
+                    return
+                printer.thumbs.append(name)
+                self._json({"code": 0, "message": "Success",
+                            "imageData": PREVIEW_PNG_B64})
+                return
+
             if path == "/gcodeList":
                 names = [u["filename"] for u in printer.uploads]
                 detail = [{
                     "gcodeFileName": u["filename"],
-                    "printingTime": "1h 2m",
-                    "totalFilamentWeight": 43,
+                    # The device's real units: seconds as an int, and an
+                    # unrounded float weight. A pre-formatted string here would
+                    # hide the page's formatting bug rather than catch it.
+                    "printingTime": 910,
+                    "totalFilamentWeight": 7.840000152587891,
                     "gcodeToolDatas": [
                         {"toolId": 0, "slotId": 1, "materialName": "PLA",
                          "materialColor": "#FFFFFF", "filamentWeight": 43},

@@ -132,8 +132,8 @@ def main():
             spec.loader.exec_module(reg)
             package.plugin_class().register_capabilities()
             names = {c.__name__ for c in package.registered_capabilities}
-            check("registers the tab, the slice capturer and the printer agent",
-                  names == {"FlashForgePage", "LastSliceCapture", "FlashForgeAgent"},
+            check("registers exactly the tab and the printer agent",
+                  names == {"FlashForgePage", "FlashForgeAgent"},
                   str(sorted(names)))
             check("declares the printer URLs and the staging directory",
                   any(u.startswith("http://127.0.0.1") for u in
@@ -182,38 +182,18 @@ def main():
             printer.set(status="ready")
 
             # ---------------------------------------------------------------
-            print("\nStaging an OrcaSlicer .gcode.3mf bundle")
+            print("\nThe upload wire contract")
+            # The tab no longer sends anything: OrcaSlicer's own Print button
+            # does, through the printer agent, and that path uploads with this
+            # same client method. So the wire contract is asserted here.
             bundle = build_3mf(os.path.join(workdir, "model.gcode.3mf"))
-            blob = open(bundle, "rb").read()
-            tab.clear()
-            tab.send({"type": "stage_begin", "name": "model.gcode.3mf",
-                      "size": len(blob)})
-            check("staging begins with an ack", tab.seen("stage_ack"))
-            # Send it the way the page does: one ack-driven chunk at a time.
-            offset = 0
-            while offset < len(blob):
-                end = min(offset + 512 * 1024, len(blob))
-                tab.send({"type": "stage_chunk", "seq": offset,
-                          "data": base64.b64encode(blob[offset:end]).decode()})
-                offset = end
-            staged = tab.latest("staged")
-            check("staging completes and reports the file", staged is not None)
-            check("tools are read out of the bundle's slice_info.config",
-                  staged and len(staged["tools"]) == 2
-                  and staged["tools"][0]["material"] == "PLA",
-                  str(staged)[:220])
-            check("each tool gets a nearest-loaded-slot suggestion",
-                  staged and all(t.get("suggested") for t in staged["tools"]),
-                  str(staged)[:220])
-
-            # ---------------------------------------------------------------
-            print("\nSend and print")
-            tab.clear()
-            tab.send({"type": "commit", "print": True, "leveling": True,
-                      "mappings": [{"tool": 1, "slot": 2}, {"tool": 2, "slot": 3}]})
-            job = wait_for_job(tab)
-            check("the send job finishes without error",
-                  job is not None and not job.get("error"), str(job))
+            client = plugin.RUNTIME.client()
+            send_path, extracted = plugin.unwrap_for_printer(bundle, "model.gcode.3mf")
+            check("the .gcode.3mf bundle was unwrapped to plain G-code",
+                  bool(extracted) and os.path.basename(send_path) == "model.gcode"
+                  and open(send_path, "rb").read() == PLATE_GCODE,
+                  os.path.basename(send_path))
+            client.upload(send_path, print_now=False, leveling=True)
 
             check("the printer received exactly one upload", len(printer.uploads) == 1,
                   f"got {len(printer.uploads)}")
@@ -225,63 +205,56 @@ def main():
                   up["headers"].get("fileSize") == str(len(up["bytes"])))
             check("the upload part is named gcodeFile",
                   up["filename"] == "model.gcode", up["filename"] or "")
-            check("the G-code was extracted from the .gcode.3mf bundle",
+            check("the bytes sent are the extracted G-code, not the bundle",
                   up["bytes"] == PLATE_GCODE,
                   f"{len(up['bytes'])} bytes vs {len(PLATE_GCODE)} expected")
             check("upload used printNow=false (the print starts separately)",
                   str(up["headers"].get("printNow")).lower() == "false")
+            check("bed levelling is requested on the upload",
+                  str(up["headers"].get("levelingBeforePrint")).lower() == "true")
 
+            client.start_print("model.gcode", leveling=True)
             check("the print was started for the extracted G-code",
                   len(printer.prints) == 1
                   and printer.prints[0]["fileName"] == "model.gcode",
                   str(printer.prints)[:200])
-            mappings = printer.prints[0].get("materialMappings") or []
-            check("one mapping element per tool, five fields each",
-                  len(mappings) == 2
-                  and all(set(m) == {"toolId", "slotId", "materialName",
-                                     "toolMaterialColor", "slotMaterialColor"}
-                          for m in mappings), str(mappings))
-            check("toolId is 0-based and slotId honours the user's pick",
-                  mappings[0]["toolId"] == 0 and mappings[0]["slotId"] == 2
-                  and mappings[1]["toolId"] == 1 and mappings[1]["slotId"] == 3,
-                  str(mappings))
-            check("the material name comes from the chosen spool, not the file",
-                  mappings[0]["materialName"] == "PETG"
-                  and mappings[1]["materialName"] == "PLA", str(mappings))
 
             # ---------------------------------------------------------------
-            print("\nSend without printing")
-            tab.clear()
-            tab.send({"type": "commit", "print": False, "leveling": False,
-                      "mappings": []})
-            job = wait_for_job(tab)
-            check("send-only completes", job is not None and not job.get("error"),
-                  str(job))
-            check("send-only uploads without starting a print",
-                  len(printer.uploads) == 2 and len(printer.prints) == 1,
-                  f"{len(printer.uploads)} uploads, {len(printer.prints)} prints")
-
-            # ---------------------------------------------------------------
-            print("\nA plain .gcode has no tool metadata")
+            print("\nA plain .gcode")
             plain = os.path.join(workdir, "plain.gcode")
             with open(plain, "wb") as fh:
                 fh.write(b"G1 X0 Y0 E1 F1200\n" * 10)
+            client.upload(plain, print_now=False, leveling=True)
+            check("a plain .gcode is uploaded unchanged, not unwrapped",
+                  printer.uploads[-1]["bytes"] == open(plain, "rb").read()
+                  and printer.uploads[-1]["filename"] == "plain.gcode",
+                  printer.uploads[-1]["filename"])
+
+            # ---------------------------------------------------------------
+            print("\nPreviewing a stored file")
+            thumb = client.thumbnail("model.gcode")
+            check("the preview comes back as PNG bytes",
+                  thumb[:4] == b"\x89PNG" and len(thumb) > 50, str(thumb[:8]))
+            check("the preview was requested for the right file",
+                  printer.thumbs and printer.thumbs[-1] == "model.gcode",
+                  str(printer.thumbs))
             tab.clear()
-            tab.send({"type": "stage_begin", "name": "plain.gcode",
-                      "size": os.path.getsize(plain)})
-            tab.send({"type": "stage_chunk", "seq": 0,
-                      "data": base64.b64encode(open(plain, "rb").read()).decode()})
-            staged = tab.latest("staged")
-            check("a plain .gcode stages with an empty tool list",
-                  staged is not None and staged["tools"] == [], str(staged)[:160])
-            tab.clear()
-            tab.send({"type": "commit", "print": True, "leveling": True,
-                      "mappings": []})
-            job = wait_for_job(tab)
-            check("a plain .gcode still sends and prints",
-                  job is not None and not job.get("error"), str(job))
-            check("a plain .gcode is uploaded unchanged",
-                  printer.uploads[-1]["bytes"] == open(plain, "rb").read())
+            tab.send({"type": "preview", "filename": "model.gcode"})
+            shown = tab.latest("preview")
+            check("the tab is handed the preview as an inline image",
+                  shown is not None
+                  and shown["filename"] == "model.gcode"
+                  and shown["image"].startswith("data:image/png;base64,"),
+                  str(shown)[:120])
+            check("the inline image is the same bytes the printer sent",
+                  shown is not None
+                  and base64.b64decode(shown["image"].split(",", 1)[1]) == thumb)
+            tab.send({"type": "preview", "filename": "not-here.gcode"})
+            check("a preview for a file the printer does not have is an error",
+                  tab.latest("error") is not None
+                  and "not-here.gcode" not in (tab.latest("error") or {}).get(
+                      "message", "not-here.gcode"),
+                  str(tab.latest("error"))[:160])
 
             # ---------------------------------------------------------------
             print("\nReprint from printer storage")
@@ -292,7 +265,7 @@ def main():
             check("reprint succeeds", job is not None and not job.get("error"),
                   str(job))
             check("reprint reuses the file already on the printer",
-                  len(printer.uploads) == 3 and len(printer.prints) == 3,
+                  len(printer.uploads) == 2 and len(printer.prints) == 2,
                   f"{len(printer.uploads)} uploads, {len(printer.prints)} prints")
             check("reprint rebuilds the mapping from gcodeListDetail",
                   (printer.prints[-1].get("materialMappings") or [{}])[0]
@@ -398,135 +371,6 @@ def main():
                   agent.send_message(host, "{}", 0, False) == -7010)
 
             # ---------------------------------------------------------------
-            print("\nCapturing the last slice")
-            capture = plugin.LastSliceCapture()
-            check("the capability is named for what it does",
-                  capture.get_name() == "Capture last slice")
-            check("it registers as a slicing-pipeline capability",
-                  capture.get_type().value == "slicing-pipeline",
-                  str(capture.get_type()))
-
-            # Nothing captured: the tab has to name where the setting actually
-            # is. The user cannot be expected to browse for it, and a plausible
-            # but invented setting name is worse than no name at all.
-            plugin.LAST_SLICE.update({"path": None, "when": 0.0, "name": ""})
-            nudge = Tab(page)
-            nudge.send({"type": "send_last"})
-            refusal = nudge.latest("error")
-            check("sending with nothing captured is refused, not crashed",
-                  refusal is not None, str(refusal))
-            check("the refusal names the setting OrcaSlicer actually has",
-                  refusal is not None
-                  and "Slicing Pipeline Plugin" in refusal["message"]
-                  and "post_process_plugin" not in refusal["message"],
-                  str(refusal and refusal["message"]))
-            check("the refusal points at the fallback that always works",
-                  refusal is not None and "Model file" in refusal["message"],
-                  str(refusal and refusal["message"]))
-
-            # The markup carries the same instruction, so the user meets it
-            # before they press the button rather than after.
-            ui = page.get_ui()
-            check("the send card carries the how-to",
-                  "Slicing Pipeline Plugin" in ui
-                  and "Capture last slice" in ui)
-            # The instruction has to name the controls the user actually sees,
-            # or it just relocates the hunt.
-            check("the how-to names the mode switch and the search box",
-                  "Advanced settings" in ui and "Search in preset" in ui,
-                  "the steps do not say where to click")
-            # A file input carries its own intrinsic width; without a guard it
-            # pushes the whole docked panel sideways and clips the text beside
-            # it, and a fixed label column then truncates the picker itself.
-            check("the page survives a docked-narrow panel",
-                  "input[type=file]{width:100%" in ui
-                  and "@media (max-width:540px)" in ui,
-                  "no guard against the file picker's intrinsic width")
-            source = open(os.path.join(workdir, "flashforge-c5_any.py"),
-                          encoding="utf-8").read()
-            check("the invented setting name appears nowhere in the plugin",
-                  "post_process_plugin" not in source and "post_process_plugin" not in ui)
-
-            # A capture whose file has since gone must not be offered.
-            plugin.LAST_SLICE["path"] = os.path.join(workdir, "vanished.gcode")
-            stale = Tab(page)
-            stale.send({"type": "send_last"})
-            check("a captured path that no longer exists is refused",
-                  stale.latest("error") is not None)
-
-            # The name shown must be the name the printer ends up with: a
-            # .gcode.3mf is unwrapped before upload, so advertising the bundle
-            # name would be a lie and a reprint-by-name would fail on it.
-            check("an export name and the printer's name are reconciled",
-                  plugin.printer_name("model.gcode.3mf") == "model.gcode"
-                  and plugin.printer_name("widget.3mf") == "widget.gcode"
-                  and plugin.printer_name("plain.gcode") == "plain.gcode"
-                  and plugin.printer_name("noextension") == "noextension.gcode",
-                  plugin.printer_name("model.gcode.3mf"))
-
-            # Capture happens only at the export seam; earlier steps are no-ops.
-            plugin.LAST_SLICE.update({"path": None, "when": 0.0, "name": ""})
-            slice_path = build_3mf(os.path.join(workdir, "last.gcode.3mf"))
-            early = capture.execute(fake_orca.SlicingPipelineContext(
-                step=fake_orca.Step.posSlice, gcode_path=slice_path))
-            check("an earlier pipeline step captures nothing",
-                  early.status == fake_orca.PluginResult.Success
-                  and plugin.LAST_SLICE["path"] is None,
-                  str(plugin.LAST_SLICE))
-            done = capture.execute(fake_orca.SlicingPipelineContext(
-                step=fake_orca.Step.psGCodePostProcess, gcode_path=slice_path,
-                output_name="widget.gcode.3mf"))
-            check("the export seam captures the file at the printer-visible name",
-                  done.status == fake_orca.PluginResult.Success
-                  and plugin.LAST_SLICE["path"] == slice_path
-                  and plugin.LAST_SLICE["name"] == "widget.gcode",
-                  str(plugin.LAST_SLICE))
-            check("the capture reports itself back to OrcaSlicer",
-                  "FlashForge C5" in (done.message or ""), str(done.message))
-
-            ready = Tab(page)
-            ready.send({"type": "send_last"})
-            staged_last = ready.latest("staged")
-            check("a captured slice is staged for sending",
-                  staged_last is not None
-                  and staged_last["name"] == "widget.gcode",
-                  str(staged_last)[:160])
-            check("its tools carry a spool suggestion",
-                  staged_last is not None
-                  and len(staged_last["tools"]) == 2
-                  and all(t.get("suggested") for t in staged_last["tools"]),
-                  str(staged_last and staged_last["tools"]))
-            ready.send({"type": "status"})
-            check("the state advertises the captured slice to the page",
-                  ready.latest("state").get("last_slice") == "widget.gcode",
-                  str(ready.latest("state"))[:160])
-
-            # End to end: the tab promised one name, so the printer must be
-            # handed that name and not the staging file's.
-            before = len(printer.uploads)
-            ready.send({"type": "commit", "print": False, "leveling": True,
-                        "mappings": [{"tool": 1, "slot": 2}, {"tool": 2, "slot": 3}]})
-            wait_for_job(ready)
-            check("the printer receives the name the tab advertised",
-                  len(printer.uploads) > before
-                  and printer.uploads[-1]["filename"] == "widget.gcode",
-                  printer.uploads[-1]["filename"]
-                  if len(printer.uploads) > before else "nothing was uploaded")
-            check("it was the unwrapped G-code, not the bundle",
-                  len(printer.uploads) > before
-                  and printer.uploads[-1]["bytes"] == PLATE_GCODE)
-
-            # A capture that fails must not take OrcaSlicer's export down with
-            # it: this runs inside the export the user is waiting on.
-            gone = capture.execute(fake_orca.SlicingPipelineContext(
-                step=fake_orca.Step.psGCodePostProcess,
-                gcode_path=os.path.join(workdir, "no-such-file.gcode")))
-            check("a missing export file is a no-op, not an export failure",
-                  gone.status == fake_orca.PluginResult.Success, str(gone.status))
-
-            plugin.LAST_SLICE.update({"path": None, "when": 0.0, "name": ""})
-
-            # ---------------------------------------------------------------
             print("\nOffline behaviour")
             printer_down = plugin.Runtime()
             saved = plugin.load_settings()
@@ -536,12 +380,6 @@ def main():
             elapsed = time.time() - started
             check("an unreachable printer fails fast instead of hanging the UI",
                   status is None and error and elapsed < 2.0, f"{elapsed:.2f}s")
-            chunk_tab = Tab(page)
-            plugin._SETTINGS_CACHE = dict(saved)
-            chunk_tab.send({"type": "stage_chunk", "data": ""})
-            check("a chunk with nothing staged is refused, not crashed",
-                  chunk_tab.latest("error") is not None)
-
             # An unconfigured tab has to say so in a way the page can act on.
             # The state carries the flag, and the plain log line is suppressed
             # so it cannot overwrite the banner that offers the button.
@@ -569,9 +407,6 @@ def main():
 
             # ---------------------------------------------------------------
             print("\nHelpers")
-            check("nearest_slot skips empty slots",
-                  plugin.nearest_slot(plugin.normalize_detail(
-                      printer.detail())["spools"], "#F0F0F0") == 1)
             check("colour names are human-readable",
                   plugin.color_name("#FFFFFF") == "White"
                   and plugin.color_name("#D01012") == "Red"

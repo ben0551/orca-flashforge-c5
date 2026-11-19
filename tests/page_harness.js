@@ -60,21 +60,18 @@ function makeEl(id) {
       return this.parentNode.children[i + 1] || null;
     },
     focus() {}, scrollIntoView() {},
+    removeAttribute(k) { delete this[k]; delete this.dataset[k]; },
   };
 }
 
 const IDS = ["banner", "pname", "pip", "pfw", "dot", "stt", "jfile", "barfill",
   "jpct", "jlay", "jel", "jrem", "nozzles", "tbed", "tch", "tdoor", "tdisk",
-  "spools", "mapwrap", "tools", "bsend", "bsendprint", "blast", "lastinfo",
-  "lasthint",
-  "bfile", "finfo", "clevel", "upwrap", "upbar", "uplabel", "files", "host",
+  "spools", "upwrap", "upbar", "uplabel", "files", "prevwrap", "prevname",
+  "previmg", "host",
   "port", "serial", "code", "poll", "bsave", "cfginfo", "bpause", "bresume",
   "bcancel", "blight", "bclear", "setup"];
 const byId = {};
 IDS.forEach(id => { byId[id] = makeEl(id); });
-// The markup ships the send buttons disabled; a stub has no markup to parse.
-byId["bsend"].disabled = true;
-byId["bsendprint"].disabled = true;
 
 // The page reorders the setup card, so the stub needs a parent for it. This
 // mirrors the markup: header, banner, then the cards, with the connection
@@ -83,33 +80,23 @@ const wrap = makeEl("wrap");
 wrap.appendChild(byId["pname"]);          // stands in for #hdr
 wrap.appendChild(byId["banner"]);
 wrap.appendChild(makeEl("cardJob"));
-wrap.appendChild(makeEl("cardSend"));
+wrap.appendChild(makeEl("cardFiles"));
 wrap.appendChild(byId["setup"]);
 
-// The tool picker is generated as markup, so read the selects back out of the
-// markup the page produced and honour which option carries `selected`.
-byId["tools"].querySelectorAll = function (sel) {
-  if (sel !== "select[data-tool]") { return []; }
-  const out = [];
-  const re = /<select data-tool="(\d+)">([\s\S]*?)<\/select>/g;
-  let m;
-  while ((m = re.exec(this.innerHTML)) !== null) {
-    const chosen = /value="([^"]*)"\s+selected/.exec(m[2]) ||
-                   /value="([^"]*)"/.exec(m[2]);
-    const tool = m[1], value = chosen ? chosen[1] : "";
-    out.push({ getAttribute: () => tool, value: value });
-  }
-  return out;
-};
+// The file rows are generated as markup, so read the buttons back out of what
+// the page produced and hand each one its own click handler.
 byId["files"].querySelectorAll = function (sel) {
-  if (sel !== "button[data-reprint]") { return []; }
+  const attr = sel === "button[data-reprint]" ? "data-reprint" :
+               sel === "button[data-preview]" ? "data-preview" : null;
+  if (!attr) { return []; }
   const out = [];
-  const re = /data-reprint="([^"]*)"/g;
+  const re = new RegExp(attr + '="([^"]*)"', "g");
   let m;
   while ((m = re.exec(this.innerHTML)) !== null) {
     const name = m[1];
     out.push({ getAttribute: () => name, addEventListener: (t, fn) => {
-      (this._reprint = this._reprint || []).push({ name: name, fn: fn });
+      this._clicks = this._clicks || [];
+      this._clicks.push({ attr: attr, name: name, fn: fn });
     } });
   }
   return out;
@@ -156,15 +143,9 @@ must("every element the script touches exists", () => {
   assert(errors.length === 0, "console.error: " + errors.join("; "));
 });
 must("each control button is wired", () => {
-  ["bsave", "bfile", "bsend", "bsendprint", "blast", "bpause", "bresume",
-   "bcancel", "blight", "bclear"].forEach(id => {
-    assert(byId[id]._listeners.click || byId[id]._listeners.change,
-           id + " has no handler");
+  ["bsave", "bpause", "bresume", "bcancel", "blight", "bclear"].forEach(id => {
+    assert(byId[id]._listeners.click, id + " has no handler");
   });
-});
-must("both send buttons start disabled", () => {
-  assert(byId["bsend"].disabled && byId["bsendprint"].disabled,
-         "a send button was live before a file was staged");
 });
 
 console.log("\nPainting the plugin's real /detail payload");
@@ -201,94 +182,29 @@ must("an offline payload does not throw", () => {
          "empty nozzles not handled");
 });
 
-console.log("\nStaging a file");
-// Bigger than one 512 KB chunk, so the ack-driven pacing has something to do.
-// `slice` is what the chunk reader calls; the send buttons start disabled in
-// the markup, so mirror that here rather than assuming the stub's default.
-const CHUNK = 524288;
-const bundle = { name: "widget.gcode.3mf", size: CHUNK + 400000,
-                 slice: (start, end) => new ArrayBuffer(end - start) };
-must("picking a file starts staging immediately", () => {
-  deliver({ type: "state", last_slice: null, status: STATES.idle });
-  byId["bfile"].files = [bundle];
+console.log("\nStarting a job from the file list");
+// Sending a fresh slice is OrcaSlicer's own button now, so the only job this
+// page starts is a reprint — and that is what has to report progress.
+must("a reprint starts polling for progress", () => {
+  byId["files"]._clicks = [];
+  deliver({ type: "files", files: ["widget.gcode"], detail: [] });
+  const reprint = byId["files"]._clicks.find(c => c.attr === "data-reprint");
+  assert(reprint, "no reprint handler was wired");
   sent.length = 0;
-  byId["bfile"].dispatch("change");
-  assert(sent.some(m => m.type === "stage_begin" && m.name === bundle.name),
-         "no stage_begin posted: " + JSON.stringify(sent));
-  assert(byId["bsend"].disabled, "send went live before staging finished");
-});
-must("nothing is read until the plugin acknowledges", () => {
-  assert(!sent.some(m => m.type === "stage_chunk"),
-         "a chunk was read before the plugin asked for it");
-});
-must("the first chunk is sent on the plugin's first ack", () => {
-  // This is the bug that made every upload stall at 0%: the initial ack has
-  // seq 0, and a naive "only continue if progress > 0" guard swallowed it.
-  sent.length = 0;
-  deliver({ type: "stage_ack", seq: 0 });
-  assert(sent.some(m => m.type === "stage_chunk" && m.seq === 0),
-         "no first chunk after ack 0: " + JSON.stringify(sent.map(m => [m.type, m.seq])));
-});
-must("an ack for something we did not send is ignored", () => {
-  // Idempotency: a duplicated or out-of-order ack must not re-read the file.
-  sent.length = 0;
-  deliver({ type: "stage_ack", seq: 7 });
-  assert(sent.length === 0, "a mismatched ack triggered a re-read: " + JSON.stringify(sent));
-});
-must("subsequent chunks follow each ack", () => {
-  sent.length = 0;
-  deliver({ type: "stage_ack", seq: CHUNK });
-  assert(sent.some(m => m.type === "stage_chunk" && m.seq === CHUNK),
-         "no follow-on chunk: " + JSON.stringify(sent.map(m => [m.type, m.seq])));
-  sent.length = 0;
-  deliver({ type: "stage_ack", seq: bundle.size });
-  assert(sent.length === 0, "reading continued past the end of the file");
-});
-must("staged tools render one picker per tool, with human colour names", () => {
-  deliver({ type: "staged", name: bundle.name, tools: [
-    { tool: 1, material: "PLA", color: "#FF0000", suggested: 2, color_name: "Red" },
-    { tool: 2, material: "PLA", color: "#0000FF", suggested: 3, color_name: "Blue" }] });
-  assert(byId["mapwrap"].className !== "hidden", "mapping panel stayed hidden");
-  const html = byId["tools"].innerHTML;
-  assert((html.match(/data-tool=/g) || []).length === 2, "want 2 pickers: " + html);
-  assert(/\(Black\)|\(Grey\)/.test(html) || /Slot 2/.test(html),
-         "slot labels are not human-readable: " + html);
-  assert(!html.includes("#000000"), "a raw hex code leaked into the picker");
-});
-must("staging re-enables the send buttons", () => {
-  assert(!byId["bsend"].disabled && !byId["bsendprint"].disabled,
-         "send still disabled after staging");
+  timers.length = 0;
+  reprint.fn({ currentTarget: { getAttribute: () => "widget.gcode" } });
+  assert(sent.some(m => m.type === "reprint" && m.filename === "widget.gcode"),
+         "reprint posted nothing: " + JSON.stringify(sent));
+  assert(byId["upwrap"].className !== "hidden", "progress bar stayed hidden");
+  assert(timers.length > 0, "no job-progress timer was started");
 });
 
-console.log("\nSending");
-must("Send & print posts the pre-selected nearest slot", () => {
-  sent.length = 0;
-  byId["bsendprint"].dispatch("click");
-  const commit = sent.find(m => m.type === "commit");
-  assert(commit, "no commit posted: " + JSON.stringify(sent));
-  assert(commit.print === true, "commit.print was not true");
-  assert(commit.mappings.length === 2, "want 2 mappings: " + JSON.stringify(commit.mappings));
-  assert(commit.mappings[0].tool === 1 && commit.mappings[0].slot === 2,
-         "tool 1 did not default to the suggested slot 2");
-});
-must("Send only posts print=false", () => {
-  sent.length = 0;
-  deliver({ type: "staged", name: bundle.name, tools: [
-    { tool: 1, material: "PLA", color: "#FF0000", suggested: 2 }] });
-  byId["bsend"].dispatch("click");
-  const commit = sent.find(m => m.type === "commit");
-  assert(commit && commit.print === false, "print was not false");
-});
-must("committing starts polling for progress", () => {
-  assert(byId["upwrap"].className !== "hidden", "progress bar stayed hidden");
-});
 must("a job error reaches the banner visibly", () => {
   deliver({ type: "job", running: false, done: true, pct: 1,
             error: "PrinterError: Printer is busy" });
   assert(byId["banner"].style.display === "block", "banner stayed hidden");
   assert(byId["banner"].className === "err", "banner class: " + byId["banner"].className);
   assert(byId["banner"].textContent.includes("Printer is busy"), "error text missing");
-  assert(!byId["bsend"].disabled, "send buttons stayed disabled after the error");
 });
 must("a successful job reports what was sent", () => {
   deliver({ type: "job", running: false, done: true, pct: 1,
@@ -320,43 +236,48 @@ must("the light toggle sends the opposite of the current state", () => {
   const m2 = sent.find(x => x.type === "control" && x.action === "light");
   assert(m2 && m2.on === false, "expected on:false, got " + JSON.stringify(m2));
 });
-must("stored files render with a Reprint button", () => {
-  byId["files"]._reprint = [];
-  deliver({ type: "files", files: ["widget.gcode", "bracket.gcode"],
-            detail: [{ gcodeFileName: "widget.gcode", printingTime: "1h 2m",
-                       totalFilamentWeight: 43 }] });
+must("stored files render with Preview and Reprint buttons", () => {
+  byId["files"]._clicks = [];
+  // The device's own units: printingTime in seconds, and an unrounded float
+  // weight. Both used to be printed raw, which is what the user saw.
+  deliver({ type: "files", files: ["widget.gcode.3mf", "bracket.gcode.3mf"],
+            detail: [{ gcodeFileName: "widget.gcode.3mf", printingTime: 910,
+                       totalFilamentWeight: 7.840000152587891 }] });
   const html = byId["files"].innerHTML;
-  assert(html.includes("widget.gcode"), "file missing from the list");
-  assert(html.includes("1h 2m"), "printing time missing");
-  const buttons = byId["files"].querySelectorAll("button[data-reprint]");
-  assert(buttons.length === 2, "want 2 reprint buttons, got " + buttons.length);
+  assert(html.includes("widget.gcode.3mf"), "file missing from the list");
+  assert(html.includes("15m 10s"), "printing time not formatted: " + html);
+  assert(html.includes("7.8 g"), "weight not rounded to one decimal: " + html);
+  assert(!html.includes("7.840000152587891"), "a raw device float leaked into the UI");
+  const prev = byId["files"]._clicks.filter(c => c.attr === "data-preview");
+  const reprint = byId["files"]._clicks.filter(c => c.attr === "data-reprint");
+  assert(prev.length === 2, "want 2 preview buttons, got " + prev.length);
+  assert(reprint.length === 2, "want 2 reprint buttons, got " + reprint.length);
   sent.length = 0;
-  buttons[0].addEventListener("x", buttons[0].fn);
-  byId["files"]._reprint[0].fn({ currentTarget: buttons[0] });
-  assert(sent.some(m => m.type === "reprint" && m.filename === "widget.gcode"),
-         "reprint posted nothing: " + JSON.stringify(sent));
+  prev[0].fn({ currentTarget: { getAttribute: () => "widget.gcode.3mf" } });
+  assert(sent.some(m => m.type === "preview" && m.filename === "widget.gcode.3mf"),
+         "preview posted nothing: " + JSON.stringify(sent));
+  assert(byId["prevwrap"].className !== "hidden", "the preview panel stayed hidden");
+});
+must("a returned preview is shown against its filename", () => {
+  deliver({ type: "preview", filename: "widget.gcode.3mf",
+            image: "data:image/png;base64,AAAA" });
+  assert(byId["prevname"].textContent === "widget.gcode.3mf",
+         "filename: " + byId["prevname"].textContent);
+  assert(byId["previmg"].src === "data:image/png;base64,AAAA",
+         "image not set: " + byId["previmg"].src);
 });
 must("an empty printer file list says so rather than looking broken", () => {
   deliver({ type: "files", files: [], detail: [] });
   assert(byId["files"].innerHTML.includes("nothing stored"), byId["files"].innerHTML);
 });
-must("the last-slice hint reflects what the plugin captured", () => {
-  deliver({ type: "state", last_slice: null, status: STATES.idle });
-  assert(byId["lastinfo"].textContent.includes("no slice captured"),
-         byId["lastinfo"].textContent);
-  deliver({ type: "state", last_slice: "widget.gcode.3mf", status: STATES.idle });
-  assert(byId["lastinfo"].textContent.includes("widget.gcode.3mf"),
-         byId["lastinfo"].textContent);
-});
 
 console.log("\nSettings");
 must("saved settings are painted back into the form", () => {
   deliver({ type: "cfg", cfg: { host: "10.0.0.9", port: 8898, serial: "SN1",
-                                check_code: "CC", poll_seconds: 5, leveling: false } });
+                                check_code: "CC", poll_seconds: 5 } });
   assert(byId["host"].value === "10.0.0.9", "host: " + byId["host"].value);
   assert(byId["serial"].value === "SN1", "serial");
   assert(byId["code"].value === "CC", "check code");
-  assert(byId["clevel"].checked === false, "leveling checkbox");
 });
 must("Save & test posts the form values", () => {
   byId["host"].value = "192.168.1.50";
@@ -437,17 +358,11 @@ must("a configured tab clears the setup banner", () => {
          "the setup banner outlived the setup: " + byId["banner"].style.display);
 });
 
-must("the capture how-to is shown while there is no slice to send", () => {
-  deliver({ type: "state", status: STATES.idle, last_slice: null, needs_setup: false });
-  assert(byId["lasthint"].style.display === "block",
-         "the how-to is hidden with no slice captured");
-  deliver({ type: "state", status: STATES.idle, last_slice: "widget.gcode",
-            needs_setup: false });
-  assert(byId["lasthint"].style.display === "none",
-         "the how-to still shows once a slice is captured");
-  deliver({ type: "state", status: STATES.idle, last_slice: null, needs_setup: false });
-  assert(byId["lasthint"].style.display === "block",
-         "the how-to did not come back when the slice went away");
+must("the preview panel survives a failed preview", () => {
+  deliver({ type: "preview", filename: "widget.gcode.3mf", image: "data:image/png;base64,AAAA" });
+  deliver({ type: "error", message: "The printer has no preview for that file" });
+  assert(byId["banner"].className === "err", "the failure was not shown");
+  assert(byId["banner"].textContent.includes("no preview"), "error text missing");
 });
 
 check("no null-element lookups fired during the run", errors.length === 0,

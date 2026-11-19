@@ -25,9 +25,8 @@ with no third-party dependencies — nothing is downloaded at plugin load time.
 
 | Capability | Type | What it does |
 |---|---|---|
-| **FlashForge C5** tab | `pages` | Live status, temperatures, the 4-slot material station, job progress, pause/resume/cancel, light and clear-platform, the files stored on the printer with one-click reprint, and a send-to-print panel with a per-tool spool picker. |
-| **Capture last slice** | `slicing-pipeline` | Remembers the G-code OrcaSlicer just exported, so the tab can send it with one click. Attach it to the process preset via **Slicing Pipeline Plugin** (Advanced visibility). |
-| **FlashForge Creator 5** | `printer-connection` | Makes OrcaSlicer's own **Send to printer** / **Print** buttons work against the Creator 5, so the tab is optional for the ordinary slice-then-print flow. |
+| **FlashForge C5** tab | `pages` | Live status, temperatures, the 4-slot material station, job progress, pause/resume/cancel, light and clear-platform, and the files stored on the printer with a plate **preview** and one-click **reprint**. |
+| **FlashForge Creator 5** | `printer-connection` | Makes OrcaSlicer's own **Send to printer** / **Print** buttons work against the Creator 5. This is the sending path — the tab watches and drives the machine. |
 
 ## Install
 
@@ -52,41 +51,45 @@ with no third-party dependencies — nothing is downloaded at plugin load time.
    `settings.json` next to the plugin, mode 0600. They go nowhere except your
    printer.
 
-4. Slice something and either send it from the tab or use OrcaSlicer's own
-   **Print** button (see *Using OrcaSlicer's own buttons* below).
-
-5. Optional — one-click send of the slice you just made. **Send last OrcaSlicer
-   slice** only has something to send once the plugin's capture capability is
-   attached to your process preset:
-
-   1. Open the **Process** tab of the settings panel — the one beside
-      **Printer** and **Filament**.
-   2. Set the settings-mode switch at the top of that panel to **Advanced
-      settings**. It has three positions (Simple, Advanced, Expert); if it is
-      greyed out you are in Developer mode, which already shows everything.
-   3. Type **Slicing Pipeline Plugin** into the **Search in preset** box.
-   4. Click its value box and choose **Capture last slice** from the list.
-
-   Skipping this is fine — pick a model file in the tab instead, which is the
-   path that always works.
+4. Slice a model, then use OrcaSlicer's own **Send to printer** / **Print** button
+   on the preview screen. This plugin supplies the printer agent behind that
+   button, so the Creator 5 behaves like a built-in target. Use the tab to watch
+   the job and drive the machine.
 
 ## Using the tab
 
-Picking a model file **stages** it first — the bytes go to a temporary file beside
-the plugin instead of straight at the printer — because that is what lets the
-plugin read the tool list out of the 3MF and show you a real spool picker rather
-than guessing. Then choose **Send only** or **Send & print**.
+The tab watches and drives the printer. Sending is OrcaSlicer's own button.
+
+- **Files on the printer** lists what is stored on the device with the printing
+  time and filament weight the firmware reports. **Preview** fetches the plate
+  thumbnail the printer keeps beside a file, so you can see what it is before
+  choosing it. **Reprint** restarts a stored file with the slot mapping rebuilt
+  from the printer's own metadata.
+- **Job control** pauses, resumes, cancels, toggles the light and clears the
+  platform. `/control` acknowledges every command whether or not it does
+  anything, so each one is confirmed by re-reading the printer's state, and the
+  tab says plainly when a command was accepted but demonstrably ignored.
 
 Two things the plugin does that the raw API does not:
 
 - **OrcaSlicer writes `.gcode.3mf` bundles, and the Creator 5 cannot start one.**
   It uploads `code: 0`, appears in the file list, and then fails on the printer
   with *"print file error, please check"* because the firmware tries to unzip it.
-  The plugin extracts `Metadata/plate_1.gcode` and uploads that, telling you it
-  did.
-- **Colour choices are yours.** The spool picker pre-selects the nearest loaded
-  colour and says which substitution it made — a model needing grey lands on white
-  when grey is not loaded — and every row can be overridden before you send.
+  The plugin extracts `Metadata/plate_1.gcode` and sends that instead, so the file
+  the printer ends up holding has the name it will be known by.
+- **The plate preview.** The firmware keeps a thumbnail beside every stored job
+  and serves it from `/gcodeThumb`; the tab fetches it on demand and shows it
+  inline.
+
+## What the printer will not do
+
+**A stored file cannot be downloaded.** The Creator 5's whole HTTP API is
+`/product`, `/control`, `/detail`, `/uploadGcode`, `/gcodeList`, `/printGcode`
+and `/gcodeThumb`. There is no route that reads a file back, no FTP, and no TCP
+command channel on this model, so a job sitting on the printer cannot be pulled
+off it to view or edit. The `/gcodeThumb` image above is the only view of a
+stored file the device will give up. To edit a model, go back to the source you
+sliced it from.
 
 ## Using OrcaSlicer's own buttons (the printer agent)
 
@@ -154,20 +157,25 @@ Two suites, neither needing OrcaSlicer or a printer:
   elements — not on what the plugin thinks it sent.
 - `tests/test_page_js.py` extracts the tab's JavaScript and runs it under Node in
   a DOM stub against the plugin's real normalised `/detail` payload, checking the
-  rendering, the button wiring and the chunked staging protocol.
+  rendering, the button wiring and the file-row preview and reprint actions.
 
 ## What is and is not verified
 
 Verified by the test suites above:
 
-- The full send path: credentials as request headers, `gcodeFile` multipart part,
-  `fileSize`, `printNow=false`, the extracted plain `.gcode` bytes, and the
-  five-field mapping elements with 0-based `toolId` / 1-based `slotId`.
+- The upload wire contract: credentials as request headers, the `gcodeFile`
+  multipart part, `fileSize`, `printNow=false`, levelling, and the extracted plain
+  `.gcode` bytes rather than the bundle.
+- `/gcodeThumb` returning a PNG, and the tab showing it inline against the file
+  name.
+- Reprint rebuilding the five-field mapping elements (0-based `toolId`, 1-based
+  `slotId`) from the printer's own `gcodeListDetail`.
 - `/detail` normalisation, including zeroing the job block when the printer is
   idle — the firmware pads those fields with uninitialised memory between states.
 - Both `/control` payload shapes, with confirmation by re-reading `/detail`,
   because `/control` answers `Success` to any command including ones it ignores.
-- The tab's rendering and message protocol, and the printer agent's methods.
+- The tab's rendering and message protocol, the file-row actions, and the printer
+  agent's methods.
 - Zero third-party dependencies; standard library only.
 
 Not verified here, because it needs the real application and the real printer:

@@ -81,9 +81,8 @@ def main():
              not re.search(r"\$\{[^}]*`", js)),
             ("no optional-chaining method calls inside a template literal",
              not re.search(r"\$\{[^}]*\?\.\(", js)),
-            ("both send buttons ship disabled in the markup",
-             re.search(r'id="bsend"\s+disabled', page) is not None
-             and re.search(r'id="bsendprint"[^>]*disabled', page) is not None),
+            ("the stored-file rows offer a preview",
+             'data-preview="' in js),
             ("the spool card shows a colour name, not a hex code",
              's.color_name' in js),
         ]
