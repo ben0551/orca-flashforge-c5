@@ -115,8 +115,10 @@ def run_converter_checks(source, work):
         ("a local .3mf can be dropped or picked, not only typed",
          'id="drop"' in page and 'id="browse"' in page
          and 'id="file"' in page and 'type="file"' in page and '.3mf"' in page),
-        ("the drop route still offers the typed path as a fallback",
-         'id="path"' in page and 'id="convertPath"' in page),
+        ("the typed-path box is out of the flow, behind a fallback link",
+         'id="pathRow"' in page and ' hidden' in
+         re.search(r'<div[^>]*id="pathRow"[^>]*>', page).group(0)
+         and 'id="showPath"' in page and 'id="convertPath"' in page),
     ]
     failed = 0
     for name, ok, *rest in checks:

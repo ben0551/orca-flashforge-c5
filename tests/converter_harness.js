@@ -508,6 +508,15 @@ must("no token means it is left closed", () => {
   assert(!byId["tokenPanel"].open, "it opened with nothing saved");
 });
 
+console.log("\nThe typed-path fallback");
+must("the path box is out of the way until that link is followed", () => {
+  byId["pathRow"].hidden = true;
+  byId["pathFallback"].hidden = false;
+  byId["showPath"].dispatch("click", { preventDefault: () => {} });
+  assert(!byId["pathRow"].hidden, "the box did not appear");
+  assert(byId["pathFallback"].hidden, "the link stayed there after being used");
+});
+
 console.log("\nA typed path");
 must("Enter converts the path, so the button is an alternative", () => {
   sent.length = 0;

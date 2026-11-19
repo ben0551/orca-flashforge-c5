@@ -133,11 +133,14 @@ OrcaSlicer. Paste a link and pick a plate, and it downloads the plate, converts 
 and opens the result in the running OrcaSlicer ready to slice.
 
 **A `.3mf` you already have is easier still — drop it onto the tab**, or use the
-file chooser in the drop zone; no token is involved. Both convert on their own, with
-no button to press. The path box underneath is the fallback, for a file somewhere you
-would rather not navigate to: **Enter** converts there, and the button does the same
-thing, because a typed path is the one route with no moment that says "that is the
-whole path" — a drop ends when the file lands, a picker when the dialog closes.
+file chooser in the drop zone; no token is involved. Both convert on their own, with no
+button to press: a drop ends when the file lands and a picker when the dialog closes, so
+there is nothing left to confirm.
+
+Typing a path is not offered up front, because nobody chooses it when dragging works.
+It stays behind a one-line link under the drop zone for the case where neither route
+does — a webview that does not forward file drops or open a file dialog leaves a path
+as the only way in. On a normal install you will never need it.
 
 **Getting a token, if you pull a link.** It is the same BambuCloud token Bambu
 Studio uses, and it is a one-off. The field is **collapsed under "Token settings"**

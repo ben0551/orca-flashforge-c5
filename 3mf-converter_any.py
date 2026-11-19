@@ -942,16 +942,22 @@ link works too &mdash; that path needs a token, a local file never does.</p>
   <div id="plates"></div>
 </div>
 
-<label>...or a .3mf on this machine</label>
+<label>A .3mf on this machine</label>
 <div id="drop" class="drop">
-  <div><b>Drop a .3mf here</b>, or
+  <div><b>Drop it on this box</b>, or
     <button id="browse" class="quiet">choose a file</button></div>
-  <div class="note" style="margin:6px 0 0">Read on this machine and converted in
-  place &mdash; nothing is uploaded anywhere.</div>
+  <div class="note" style="margin:6px 0 0">Read here and converted in place &mdash;
+  nothing is uploaded anywhere.</div>
   <input id="file" type="file" accept=".3mf" style="display:none">
 </div>
-<div class="row" style="margin-top:6px">
-  <input id="path" type="text" placeholder="or type a path: /home/you/project.3mf">
+
+<!-- Out of the way, and reachable only if the two routes above fail. A webview
+     that does not forward file drops or open a file dialog leaves a path as the
+     only way in, and that is rare enough not to deserve space on the tab. -->
+<p class="note" id="pathFallback" style="margin:6px 0 0">Neither working?
+  <a href="#" id="showPath">Paste a path instead.</a></p>
+<div class="row" id="pathRow" hidden style="margin-top:6px">
+  <input id="path" type="text" placeholder="full path to a .3mf">
   <button id="convertPath">Convert &amp; open</button>
 </div>
 
@@ -1238,6 +1244,13 @@ link works too &mdash; that path needs a token, a local file never does.</p>
     setBusy(true, "Reading and converting...");
     post({ type: "convert_path", path: path });
   }
+
+  if ($("showPath")) $("showPath").addEventListener("click", function (e) {
+    e.preventDefault();
+    if ($("pathRow")) $("pathRow").hidden = false;
+    if ($("pathFallback")) $("pathFallback").hidden = true;
+    if ($("path")) $("path").focus();
+  });
 
   if ($("convertPath")) $("convertPath").addEventListener("click", convertFromPath);
   // A dropped file converts on its own and so does a chosen one, because each has
