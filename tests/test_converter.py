@@ -312,11 +312,36 @@ def main():
 
         machine_owned = [k for k in DESIGNER
                          if k in plugin.PRESET_PRINTER_KEYS or k in MACHINE]
-        check("the report counts what was kept, replaced and dropped",
-              report["kept"] == len(DESIGNER) - len(machine_owned)
-              and report["replaced"] > 0 and report["dropped"] == 1
+        # Every key that was looked at lands in exactly one bucket, and the
+        # buckets are named for what actually happened to the key — a preset name
+        # relabelled to the user's own is neither "kept" nor "machine hardware".
+        buckets = ["kept_keys", "replaced_keys", "dropped_keys",
+                   "relabelled_keys", "stripped_keys"]
+        covered = set()
+        for name in buckets:
+            covered |= set(report[name])
+        check("every key the project carried is accounted for in the report",
+              set(DESIGNER) <= covered,
+              str(sorted(set(DESIGNER) - covered)))
+        check("and no key is counted in two buckets",
+              sum(len(report[name]) for name in buckets) == len(covered),
+              str({name: report[name] for name in buckets
+                   if report[name]}))
+        check("the report counts what was kept, replaced and reset",
+              report["replaced"] > 0 and report["dropped"] == 1
               and report["printer"] == PRINTER_NAME
               and report["source_printer"] == "Bambu Lab P1P", str(report)[:200])
+        check("the designer's intent is counted as kept, never as replaced",
+              all(k in report["kept_keys"] for k in
+                  ("layer_height", "wall_loops", "sparse_infill_pattern",
+                   "sparse_infill_density", "support_type", "seam_position",
+                   "nozzle_temperature", "filament_colour")),
+              str(report["kept_keys"]))
+        check("preset names are relabelled, not counted as kept or replaced",
+              "printer_settings_id" in report["relabelled_keys"]
+              and "filament_settings_id" in report["relabelled_keys"]
+              and not (set(report["relabelled_keys"]) & set(report["kept_keys"])),
+              str(report["relabelled_keys"]))
         check("the report names the intent in the user's words",
               "layer_height" in report["kept_examples"]
               and "sparse_infill_pattern" in report["kept_examples"], "")
@@ -439,6 +464,17 @@ def main():
         orca_stub.install_preset_bundle(fake_orca.FakePresetBundle(
             printers=[fake_orca.FakePreset(PRINTER_NAME)],
             current=fake_orca.FakePreset(PRINTER_NAME)))
+
+        # What the review flagged: the plugin reads OrcaSlicer's printer preset,
+        # and that preset also holds the printer's address and credentials. It
+        # must read the machine's geometry and stop there.
+        keys_read, values_read, _ = plugin.machine_snapshot()
+        check("nothing a printer keeps private is read out of its preset",
+              not (set(keys_read) & plugin.CONNECTION_KEYS),
+              str(sorted(set(keys_read) & plugin.CONNECTION_KEYS)))
+        check("the read is a fixed published set, not whatever the preset sets",
+              set(keys_read) == set(plugin.PRESET_PRINTER_KEYS)
+              - plugin.CONNECTION_KEYS, str(len(keys_read)))
         # The page can read a file's bytes but never sees a path, so it arrives
         # base64-encoded and has to convert the same way a typed path does.
         page = plugin.MakerWorldPage()
@@ -529,13 +565,54 @@ def main():
               and rep["replaced_keys"] == ["machine_start_gcode", "printable_area"]
               and rep["kept"] == 1 and rep["replaced"] == 2, str(rep))
 
+        check("connection settings are named as such, and never read from a preset",
+              {"printhost_apikey", "printhost_password", "print_host",
+               "printhost_user"} <= plugin.CONNECTION_KEYS)
+        check("the machine key set and the connection set do not overlap",
+              not (plugin.CONNECTION_KEYS - plugin.PRESET_PRINTER_KEYS),
+              str(sorted(plugin.CONNECTION_KEYS - plugin.PRESET_PRINTER_KEYS)))
+
+        # A converted .3mf gets passed around, so the designer's own connection
+        # settings must not travel in it — and being told they were removed is
+        # worth more than a silent fix.
+        cfg4, rep4 = plugin.convert_project(
+            {"layer_height": "0.2", "printhost_apikey": "SECRET",
+             "print_host": "192.168.1.9", "printhost_user": "admin"},
+            set(), {}, {})
+        check("connection settings never survive into the converted project",
+              not (set(cfg4) & plugin.CONNECTION_KEYS)
+              and rep4["stripped_keys"] == ["print_host", "printhost_apikey",
+                                            "printhost_user"],
+              str(rep4["stripped_keys"]))
+        check("the removal is reported, not silent",
+              any("connection setting" in w["message"] for w in rep4["warnings"]),
+              str(rep4["warnings"]))
+        check("they are not also counted as kept from the designer",
+              not (set(rep4["kept_keys"]) & plugin.CONNECTION_KEYS),
+              str(rep4["kept_keys"]))
+
         cfg2, rep2 = plugin.convert_project(
-            {"printer_model": "Bambu Lab P1P", "layer_height": "0.2"},
-            {"printer_model"}, {}, {})
+            {"bed_mesh_probe_distance": "50,50", "layer_height": "0.2"},
+            {"bed_mesh_probe_distance"}, {}, {})
+        cfg6, rep6 = plugin.convert_project(
+            {"printable_area": ["0x0"], "layer_height": "0.2"},
+            {"printable_area"}, {"printable_area": ["0x0"]}, {})
+        check("a machine key both sides agree on is still reported as the printer's",
+              rep6["replaced_keys"] == ["printable_area"]
+              and rep6["replaced"] == 1, str(rep6))
+
         check("a machine key the printer has no value for is reported as reset",
-              rep2["dropped_keys"] == ["printer_model"]
+              rep2["dropped_keys"] == ["bed_mesh_probe_distance"]
               and rep2["dropped"] == 1 and rep2["kept_keys"] == ["layer_height"],
               str(rep2))
+        # A preset-name key with nothing to relabel it to must not fall through
+        # the report: it is still a machine key with no value.
+        cfg5, rep5 = plugin.convert_project(
+            {"printer_model": "Bambu Lab P1P", "layer_height": "0.2"},
+            {"printer_model"}, {}, {})
+        check("a preset-name key with nothing to point at is reported as reset",
+              rep5["dropped_keys"] == ["printer_model"]
+              and rep5["relabelled_keys"] == [], str(rep5)[:200])
 
         cfg3, rep3 = plugin.convert_project(
             {"nozzle_diameter": ["0.4"], "layer_height": "0.2"},

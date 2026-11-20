@@ -182,6 +182,22 @@ just how many settings moved:
 OrcaSlicer's own data directory, several levels down and awkward to reach. The tab
 lists them — newest first, with size and age — and opens one again with a click.
 
+**What the converter reads, and what it will not.** To rebuild a project it reads
+OrcaSlicer's **printer profile** — bed shape, machine limits, G-code, thermals, nozzle
+and extruder setup — because that is what the designer's machine has to be replaced
+with. The list of keys is OrcaSlicer's own published machine-option set, and nothing
+outside it is read.
+
+Connection settings are excluded from that list, and removed from any project that
+arrives carrying them. OrcaSlicer keeps the printer's address, user, password and API
+key among its printer options, and those are not machine geometry — they are how one
+particular machine is reached. A converted `.3mf` gets passed around; it must not
+carry someone's printer credentials inside it. If a project you convert had them, the
+report says which were removed rather than fixing it silently.
+
+The converter makes **no connection to your printer at all**. It never has, and the
+only network calls it makes are to MakerWorld, and only when you paste a link.
+
 **What is kept and what is replaced.** OrcaSlicer already knows which settings
 belong to a machine: `Preset::printer_options()` is that list, and the plugin uses
 it rather than a hand-written one. Every key the machine owns takes the selected

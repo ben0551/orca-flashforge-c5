@@ -169,6 +169,19 @@ EXTRUDER_KEYS = frozenset((
 # s_Preset_machine_limits_options + PrintConfigDef::extruder_option_keys().
 # Read out of OrcaSlicer 2.5.0's Preset.cpp / PrintConfig.cpp. The live preset's
 # config_keys() is unioned on top, so a newer build adding a key still converts.
+# Connection settings sit inside OrcaSlicer's own machine-option set, so they look
+# like machine keys — but they are not machine *geometry*, they are where the printer
+# is and how to authenticate to it. They are never read out of a user's preset and
+# never written into a converted project: a converted .3mf gets passed around, and it
+# must not carry someone's printer address, user or password out with it. A project
+# that arrives carrying them has them stripped (see convert_project).
+CONNECTION_KEYS = frozenset((
+    "print_host", "print_host_webui", "host_type", "bbl_use_printhost",
+    "printhost_apikey", "printhost_password", "printhost_user",
+    "printhost_cafile", "printhost_port", "printhost_authorization_type",
+    "printhost_ssl_ignore_revoke",
+))
+
 PRESET_PRINTER_KEYS = frozenset((
     "adaptive_bed_mesh_margin", "auxiliary_fan", "bbl_use_printhost",
     "bed_custom_model", "bed_custom_texture", "bed_exclude_area",
@@ -371,8 +384,30 @@ def convert_project(project, machine_keys, machine_values, identity):
     count = len(extruders) if isinstance(extruders, list) and extruders else 1
 
     out = dict(project)
-    replaced, kept, dropped = [], [], []
+    # A project can carry the designer's own connection settings. They are not
+    # settings this converter has any business moving: they are how *their* machine
+    # was reached. Out they go, and the report says so, because a stripped
+    # credential is worth knowing about rather than silently fixing.
+    stripped = sorted(key for key in CONNECTION_KEYS if key in out)
+    for key in stripped:
+        out.pop(key, None)
+    replaced, kept, dropped, relabelled = [], [], [], []
     for key in sorted(set(project) | set(machine_values)):
+        if key in CONNECTION_KEYS:
+            # Already stripped from `out` above; classifying them as either kept
+            # or replaced would put them back in the report as if they mattered.
+            continue
+        if key in IDENTITY_KEYS and identity.get(key) not in (None, project.get(key)):
+            # These name a preset rather than describing the print, and they are
+            # pointed at the user's own so the project resolves against what they
+            # have. Neither "kept" nor "replaced by your printer" is true of them,
+            # and filing them under either would hide what actually happened.
+            #
+            # Only when there is a replacement to point at: with nothing to
+            # relabel to, the key falls through and is reported as reset instead
+            # of disappearing from the report entirely.
+            relabelled.append(key)
+            continue
         if key in machine_keys:
             if key not in machine_values:
                 if key in out:
@@ -382,9 +417,12 @@ def convert_project(project, machine_keys, machine_values, identity):
             value = machine_values[key]
             if key in EXTRUDER_KEYS:
                 value = _fit_extruder(value, project.get(key), count)
-            if out.get(key) != value:
-                replaced.append(key)
             out[key] = value
+            # Counted whether or not it differs: the printer's answer is the one
+            # that ends up in the file either way, and an audit that quietly omits
+            # the settings where both sides happened to agree is not an audit —
+            # it leaves keys the reader cannot find anywhere.
+            replaced.append(key)
         elif key in project:
             kept.append(key)
     out.update({k: v for k, v in identity.items() if v is not None})
@@ -394,6 +432,16 @@ def convert_project(project, machine_keys, machine_values, identity):
     source_count = len(project.get("nozzle_diameter") or []) or 1
     target_count = len(machine_values.get("nozzle_diameter") or []) or source_count
     warnings = []
+    if stripped:
+        warnings.append({
+            "level": "check",
+            "message": ("The project carried " + str(len(stripped)) +
+                        " printer connection setting" +
+                        ("s" if len(stripped) != 1 else "") + " (" +
+                        ", ".join(stripped) + "). They were removed: they describe "
+                        "the machine the project came from, not the print, and a "
+                        "project file gets shared."),
+        })
     if source_count != target_count:
         warnings.append({
             "level": "check",
@@ -412,9 +460,12 @@ def convert_project(project, machine_keys, machine_values, identity):
         "replaced_examples": replaced[:12],
         # The full lists, not only the counts: the whole point of the report is
         # being able to check one setting, and a count cannot be checked.
+        "relabelled": len(relabelled),
+        "relabelled_keys": sorted(relabelled),
         "kept_keys": sorted(kept),
         "replaced_keys": sorted(replaced),
         "dropped_keys": sorted(dropped),
+        "stripped_keys": stripped,
         "warnings": warnings,
     }
     return out, report
@@ -602,10 +653,14 @@ def rewrite_3mf(blob, config):
 def machine_snapshot():
     """(keys, values, printer_name) for the printer selected in OrcaSlicer.
 
-    `config_keys()` alone is not enough: it lists what the preset sets, not what
-    the machine owns, so a key the profile leaves at its default would keep the
-    designer's value. PRESET_PRINTER_KEYS is OrcaSlicer's own answer to which keys
-    belong to a printer, so the two are unioned.
+    The key set is OrcaSlicer's own published answer to which settings a printer
+    owns — PRESET_PRINTER_KEYS — minus the connection settings in CONNECTION_KEYS.
+    Nothing else is read.
+
+    An earlier version unioned that with `preset.config_keys()`, which is every key
+    the selected preset happens to set. That was wrong twice over: too broad, since
+    it pulls in the printer's address and credentials, and too weak, since a key a
+    preset sets is not thereby owned by the machine.
     """
     try:
         bundle = orca.host.preset_bundle()
@@ -618,11 +673,7 @@ def machine_snapshot():
                               "convert - the project is rebuilt for whatever is "
                               "selected.")
 
-    keys = set(PRESET_PRINTER_KEYS)
-    try:
-        keys.update(preset.config_keys())
-    except Exception:
-        pass
+    keys = set(PRESET_PRINTER_KEYS) - CONNECTION_KEYS
 
     values = {}
     for key in keys:
@@ -1096,7 +1147,8 @@ link works too &mdash; that path needs a token, a local file never does.</p>
       "<b>" + esc(r.printer) + "</b> project, rebuilt from " + esc(r.source_printer),
       "<b>" + r.kept + "</b> settings kept from the designer" +
         (kept ? " (including " + kept + ")" : ""),
-      "<b>" + r.replaced + "</b> taken from your printer, <b>" + r.dropped +
+      "<b>" + r.replaced + "</b> taken from your printer, <b>" + (r.relabelled || 0) +
+        "</b> pointed at your own presets, <b>" + r.dropped +
         "</b> reset to OrcaSlicer's defaults"
     ];
 
@@ -1152,8 +1204,10 @@ link works too &mdash; that path needs a token, a local file never does.</p>
     // The counts above are only trustworthy if the lists behind them can be
     // read, so every one of them opens.
     html += keyBox("Kept from the designer", r.kept_keys);
+    html += keyBox("Pointed at your own presets", r.relabelled_keys);
     html += keyBox("Replaced by your printer", r.replaced_keys);
     html += keyBox("Reset to OrcaSlicer's defaults", r.dropped_keys);
+    html += keyBox("Removed: printer connection settings", r.stripped_keys);
 
     box.innerHTML = html;
     box.hidden = false;

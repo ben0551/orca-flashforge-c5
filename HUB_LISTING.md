@@ -174,10 +174,18 @@ page.
 >   explains in place how to get one (it is the `token` cookie from a signed-in
 >   makerworld.com session); a local `.3mf` needs no token at all.
 >
-> **Privacy.** A BambuCloud token (needed to download a link, and only for that)
-> lives in `settings.json` beside the plugin at mode 0600, and is sent to
-> MakerWorld alone. This plugin never talks to your printer. It has no
-> dependencies.
+> **Privacy, and what this plugin reads.** A BambuCloud token (needed to download
+> a link, and only for that) lives in `settings.json` beside the plugin at mode 0600,
+> and is sent to MakerWorld alone.
+>
+> The plugin reads OrcaSlicer's **printer profile** — the machine geometry it needs
+> to rebuild the project: bed shape, machine limits, G-code, thermals, nozzle and
+> extruder setup. That is a fixed, published list of machine options, and it stops
+> there. It does **not** read the printer's address, user or password, and it makes
+> **no network connection to your printer** — converting a `.3mf` never touches it.
+> Those connection settings are also stripped from any project that arrives carrying
+> them, so a converted file never carries someone's printer credentials inside it.
+> It has no dependencies.
 >
 > **Requirements.** OrcaSlicer 2.5.0 or newer, and a printer selected in it — that
 > is what the project gets rebuilt for.
