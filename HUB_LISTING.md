@@ -1,35 +1,31 @@
 # Orca Cloud hub listing
 
-Copy-paste material for the plugins' pages on the Orca Cloud hub, kept here so the
+Copy-paste material for this plugin's page on the Orca Cloud hub, kept here so the
 listing text does not drift from the code.
 
-**There are two plugins in this repo, and therefore two listings.** They are
-installed, versioned and published independently, and the hub sees them as
-unrelated plugins. Everything below is labelled with the plugin it belongs to.
+This repository holds **one** plugin. The 3mf Converter has its own repository
+(`orca-3mf-converter`) and its own listing, because Orca Cloud connects a repository
+to exactly one plugin.
 
 ## Checklist before publishing
 
 | # | Requirement | Status |
 |---|---|---|
-| 1 | Plugin file carries a target-OS suffix — `any` for a pure Python plugin | Done: `flashforge-c5_any.py`, `3mf-converter_any.py` |
-| 2 | A `LICENSE` file at the repo root | Done: MIT (covers both) |
+| 1 | Plugin file carries a target-OS suffix — `any` for a pure Python plugin | Done: `flashforge-c5_any.py` |
+| 2 | A `LICENSE` file at the repo root | Done: MIT |
 | 3 | `.py` only, no binaries/archives/symlinks in the upload | Done: one `.py` each |
-| 4 | Release tag is a semantic version greater than the one listed | `flashforge-v1.3.1` / `3mf-v1.3.0` on first publish |
-| 5 | Repo connected in the portal, **once per plugin**: **Shared Plugins → Edit plugin → GitHub publishing** → `ben0551/orca-flashforge-c5` → Connect | Not yet — manual step, needs your login |
+| 4 | Release tag is a semantic version greater than the one listed | `v1.3.1` on first publish |
+| 5 | Repo connected in the portal: **Plugins → Shared → the plugin → Edit plugin → GitHub publishing** → `ben0551/orca-flashforge-c5` → Connect | Not yet — manual step, needs your login |
 | 6 | Portal metadata filled: compatible OrcaSlicer version, supported OS, tags | Not yet — set in the portal, once per listing |
 | 7 | Listing icon uploaded (set in the portal, not in plugin metadata) | Ready: `icon.png` (512), `icon-256.png`, `icon-128.png` |
 
-Once 5 and 6 are done, publishing a new version of **one** plugin is just: push,
-create a GitHub Release whose tag carries that plugin's prefix, and publish it. The
-tag decides which workflow runs:
+Once 5 and 6 are done, publishing a new version is: push, create a GitHub Release
+tagged `vX.Y.Z`, publish it. `.github/workflows/publish-orcacloud.yml` uploads the
+file, the tag becomes the version, and the release notes become the changelog.
 
-| Plugin | Workflow | Release tag | Version published |
-|---|---|---|---|
-| `flashforge-c5` | `.github/workflows/publish-flashforge-c5.yml` | `flashforge-v1.2.0` | `1.2.0` |
-| `3mf-converter` | `.github/workflows/publish-3mf-converter.yml` | `3mf-v1.3.0` | `1.3.0` |
-
-Each workflow refuses a tag that is not its own, so publishing one plugin never
-touches the other's listing. That plugin's release notes become its changelog.
+**A repository connects to exactly one plugin.** Orca Cloud fails a run with a 401 if
+the repository is connected to none or to more than one, which is why the 3mf
+Converter is a separate repository rather than a second listing here.
 
 ## ⚠️ Read this first: the hub needs a Nightly build
 
@@ -55,7 +51,7 @@ editing numbers and re-running rather than redrawing art. The wiki documents no
 icon field in plugin metadata, so expect to upload it on the portal's listing
 page.
 
-### `flashforge-c5` → listing 1
+### The listing
 
 **Name:** FlashForge Creator 5 Device Tab
 
@@ -127,69 +123,6 @@ page.
 > About, and → Network) — unless you already set the printer up in OrcaSlicer,
 > in which case the plugin reads them from there.
 
-### `3mf-converter` (3mf Converter) → listing 2
-
-**Name:** 3mf Converter
-
-**Types:** one capability — Pages. See *Capability types and the hub* below.
-
-**Compatible OrcaSlicer:** 2.5.0 or newer
-
-**Supported OS:** any (pure Python, standard library only)
-
-**Tags:** `makerworld`, `3mf`, `converter`, `bambu-studio`, `project`,
-`rebuild-for-my-printer`
-
-**Short description**
-
-> Paste a MakerWorld link and get the designer's project rebuilt for the printer
-> you have selected, then opened in OrcaSlicer ready to slice. A MakerWorld file is
-> a Bambu Studio project, so opening one as it comes slices for the *designer's*
-> printer — their bed, their machine limits, their start and end G-code — and
-> buries everything they tuned. This plugin replaces every setting the machine owns
-> with yours and keeps every setting the designer actually chose.
-
-**Long description**
-
-> **The problem.** A MakerWorld `.3mf` is a Bambu Studio project. Opening one as it
-> comes is not an error — OrcaSlicer ships the Bambu profiles, so the file loads
-> and slices cleanly, as a Bambu Lab P1P. Wrong bed, wrong machine limits, wrong
-> start and end G-code, and everything the designer tuned is buried under a printer
-> you do not own.
->
-> **What you get**
->
-> - **The conversion.** Every setting the *machine* owns is taken from the printer
->   selected in OrcaSlicer; every other setting is left exactly as the designer set
->   it. Layer height, walls, infill, shells, seam, supports, temperatures and
->   colours stay theirs — they know their model.
-> - **The plate you want.** Resolving a link lists its plates, so you pick the one
->   to convert rather than getting the first.
-> - **It opens itself.** The converted project is handed straight to the running
->   OrcaSlicer, ready to slice. If that is refused, the tab says why and prints the
->   path, so you can finish with **File → Open Project…**.
-> - **A file you already have, or a link.** Drop a `.3mf` straight onto the tab or
->   pick it with the file chooser — no typing a path — or paste a MakerWorld link and
->   pick the plate to pull. Downloading a link needs a BambuCloud token, and the tab
->   explains in place how to get one (it is the `token` cookie from a signed-in
->   makerworld.com session); a local `.3mf` needs no token at all.
->
-> **Privacy, and what this plugin reads.** A BambuCloud token (needed to download
-> a link, and only for that) lives in `settings.json` beside the plugin at mode 0600,
-> and is sent to MakerWorld alone.
->
-> The plugin reads OrcaSlicer's **printer profile** — the machine geometry it needs
-> to rebuild the project: bed shape, machine limits, G-code, thermals, nozzle and
-> extruder setup. That is a fixed, published list of machine options, and it stops
-> there. It does **not** read the printer's address, user or password, and it makes
-> **no network connection to your printer** — converting a `.3mf` never touches it.
-> Those connection settings are also stripped from any project that arrives carrying
-> them, so a converted file never carries someone's printer credentials inside it.
-> It has no dependencies.
->
-> **Requirements.** OrcaSlicer 2.5.0 or newer, and a printer selected in it — that
-> is what the project gets rebuilt for.
-
 ## Capability types and the hub
 
 A plugin is **not listed under a single type**. From the wiki's Plugin Types page:
@@ -199,11 +132,11 @@ shows *one row per registered capability*, each with its own enable checkbox and
 its own type label. The types are **Script**, **Slicing Pipeline**, **Printer
 Connection**, **Pages**, and **Resource Texture** packs.
 
-So `flashforge-c5` presents two rows — Pages (the FlashForge C5 tab) and Printer
-Connection (the printer agent) — and `3mf-converter` presents one, Pages (the
-3mf Converter tab). The Pages type does not appear in the listing dropdown, so there
-is nothing to match and nothing to contort; the dropdown describes a narrower set
-than the capability system supports.
+So this plugin presents two rows — Pages (the FlashForge C5 tab) and Printer
+Connection (the printer agent). Neither appears in the listing card's dropdown
+(Script / Slicing-pipeline / Resource textures), so there is nothing to match and
+nothing to contort; that dropdown describes a narrower set than the capability system
+supports.
 
 The printer-agent type is not even ours to set: `PrinterAgentBase.get_type()`
 already returns `orca.PluginType.PrinterConnection` (`"printer-connection"`) and

@@ -8,11 +8,7 @@ echo "=== FlashForge Creator 5 Device Tab (python) ==="
 python3 tests/test_plugin.py || status=1
 
 echo
-echo "=== 3mf Converter plugin (python) ==="
-python3 tests/test_converter.py || status=1
-
-echo
-echo "=== both tabs' pages (node) ==="
+echo "=== the tab's page (node) ==="
 if command -v node >/dev/null 2>&1; then
   python3 tests/test_page_js.py || status=1
 else

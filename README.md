@@ -1,10 +1,11 @@
-# Creator 5 plugins for OrcaSlicer
+# FlashForge Creator 5 Device Tab — an OrcaSlicer plugin
 
-Two small plugins that close the two gaps between a FlashForge Creator 5 / 5 Pro
-and OrcaSlicer. **They are separate plugins — installed separately, versioned
-separately and released separately.** Neither imports or depends on the other, so
-you can update one without touching the other, install one without the other, and
-remove one without breaking the other.
+Send prints to a FlashForge Creator 5 / 5 Pro from inside OrcaSlicer and watch the
+job there, instead of handing the file to FlashForge's own app or a web page.
+
+The 3mf Converter — which rebuilds a `.3mf` for the printer selected in OrcaSlicer —
+is a **separate plugin in a separate repository** (`orca-3mf-converter`). The two are
+installed, versioned and published independently.
 
 FlashForge's Creator 5 firmware exposes a complete local HTTP API on port 8898 —
 status, temperature, the material station, the stored file list, upload, start
@@ -12,18 +13,14 @@ print, pause/resume/cancel, light — but the printer presents itself to a slice
 a cloud-bound Bambu-style device, so OrcaSlicer will not upload to it or show its
 status. This plugin speaks the printer's own LAN protocol from inside OrcaSlicer.
 
-Each is one Python file in the standard OrcaSlicer plugin format
+It is one Python file in the standard OrcaSlicer plugin format
 ([plugin docs](https://www.orcaslicer.com/wiki/developer_reference/plugin_development/plugin_development.html)),
-with no third-party dependencies — nothing is downloaded at plugin load time.
+with no third-party dependencies — nothing is downloaded at plugin load time. It
+registers two capabilities: the device tab and the printer agent.
 
-| Plugin file | Listing name | Adds | Tab |
-|---|---|---|---|
-| `flashforge-c5_any.py` | **FlashForge Creator 5 Device Tab** | a device tab and a printer agent | **FlashForge C5** |
-| `3mf-converter_any.py` | **3mf Converter** | a converter tab | **3mf Converter** |
-
-The listing name and the tab name differ on purpose: the hub list is where a
-stranger has to work out what the plugin does, so it says so; the tab is what you
-read while working, so it stays short.
+The listing name is **FlashForge Creator 5 Device Tab** and the tab is
+**FlashForge C5** — deliberately different, since the hub list is where a stranger
+works out what the plugin does and the tab is what you read while working.
 
 ## Requirements
 
@@ -34,38 +31,22 @@ read while working, so it stays short.
   Network for the check code). **If you have already set this printer up in
   OrcaSlicer, you do not need to type any of it** — see *Reading OrcaSlicer's own
   printer settings* below.
-- For `3mf-converter` only, and only when you use a link rather than a file you
-  already have: a **BambuCloud token**. See *The 3mf Converter tab* below.
 
 ## What you get
-
-**`flashforge-c5`** — the printer itself.
 
 | Capability | Type | What it does |
 |---|---|---|
 | **FlashForge C5** tab | `pages` | Live status, temperatures, the 4-slot material station, a **live camera view**, job progress, pause/resume/cancel, light and clear-platform, and the files stored on the printer with a plate **preview** and one-click **reprint**. |
 | **FlashForge Creator 5** | `printer-connection` | Makes OrcaSlicer's own **Send to printer** / **Print** buttons work against the Creator 5. This is the sending path — the tab watches and drives the machine. |
 
-**`3mf-converter`** — models from MakerWorld.
-
-| Capability | Type | What it does |
-|---|---|---|
-| **3mf Converter** tab | `pages` | Paste a MakerWorld link (or drop a `.3mf`) and get the designer's project rebuilt for the printer you have selected, then opened in OrcaSlicer ready to slice. |
-
 ## Install
 
-Install the plugin you want, or both. Each is independent, and each goes in its
-own folder.
-
 1. Open **Plugins** in OrcaSlicer, then **Browse plugins ▾ → Install local
-   plugin**, and pick `flashforge-c5_any.py` and/or `3mf-converter_any.py`.
+   plugin**, and pick `flashforge-c5_any.py`.
 
-   Or copy each file into its own folder under the OrcaSlicer data directory, e.g.
-   `%APPDATA%\OrcaSlicer\orca_plugins\flashforge-c5\flashforge-c5_any.py` and
-   `%APPDATA%\OrcaSlicer\orca_plugins\3mf-converter\3mf-converter_any.py`. A
-   plugin folder must contain exactly one entry file (one `.py` or one `.whl`), so
-   **the two files must not share a folder** — one folder holding both will load
-   neither.
+   Or copy the file into its own folder under the OrcaSlicer data directory, e.g.
+   `%APPDATA%\OrcaSlicer\orca_plugins\flashforge-c5\flashforge-c5_any.py`. A
+   plugin folder must contain exactly one entry file (one `.py` or one `.whl`).
 
    The `_any` suffix is not decoration — Orca Cloud's hub requires a target-OS
    suffix on uploaded plugin files, and `any` is its universal marker for a pure
@@ -118,111 +99,6 @@ Two things the plugin does that the raw API does not:
 - **The plate preview.** The firmware keeps a thumbnail beside every stored job
   and serves it from `/gcodeThumb`; the tab fetches it on demand and shows it
   inline.
-
-## The 3mf Converter tab
-
-A MakerWorld `.3mf` is a **Bambu Studio project**. Opening one as it comes is not
-an error — OrcaSlicer ships the Bambu profiles, so the file loads and slices
-happily, but it slices for the *designer's* machine: their bed height, their
-machine limits, their start and end G-code. Everything they tuned is buried under
-a printer you do not own, and switching the printer afterwards throws the settings
-away.
-
-The **3mf Converter** tab rebuilds the project for whatever printer is selected in
-OrcaSlicer. Paste a link and pick a plate, and it downloads the plate, converts it,
-and opens the result in the running OrcaSlicer ready to slice.
-
-**A `.3mf` you already have is easier still — drop it onto the tab**, or use the
-file chooser in the drop zone; no token is involved. Both convert on their own, with no
-button to press: a drop ends when the file lands and a picker when the dialog closes, so
-there is nothing left to confirm.
-
-Typing a path is not offered up front, because nobody chooses it when dragging works.
-It stays behind a one-line link under the drop zone for the case where neither route
-does — a webview that does not forward file drops or open a file dialog leaves a path
-as the only way in. On a normal install you will never need it.
-
-**Getting a token, if you pull a link.** It is the same BambuCloud token Bambu
-Studio uses, and it is a one-off. The field is **collapsed under "Token settings"**
-until you need it, and it opens by itself if you ask for a link without one — most of
-what this plugin does needs no token, and a credentials box sitting open reads as a
-requirement. The steps:
-
-1. Sign in at `makerworld.com` in a browser.
-2. Press **F12** for Developer Tools.
-3. **Application** (Chrome, Edge) or **Storage** (Firefox) → **Cookies** →
-   `makerworld.com`.
-4. Click the row named `token` and copy its **Value**.
-5. Paste it into the tab and press **Save token**.
-
-No cookie called `token`? Reload the page, open the **Network** tab, click any
-request to makerworld.com, and keep the `token=…` part of its `cookie:` request
-header. Treat it like a password — it is your whole Bambu Cloud session — and it
-lapses after roughly 90 days, at which point downloads start failing and you paste
-a fresh one. It lives in `settings.json` beside the plugin (mode 0600) and goes to
-MakerWorld and nowhere else.
-
-**What the report tells you.** After a conversion the tab says what came *out*, not
-just how many settings moved:
-
-- **Every plate** in the file and the filament each one uses.
-- **The tools** the project ends up with, and the filament and profile behind each.
-- **The machine start and end G-code** that was swapped for your printer's, capped to
-  a readable head with the line count, since these blocks run to dozens of lines of
-  fan and temperature setup. A MakerWorld `.3mf` is unsliced and carries no `.gcode`
-  at all, so the G-code shown is the machine block the conversion actually replaced.
-- **The full audit** — an expandable list of every key that was kept from the
-  designer, every key replaced by your printer, and every key reset to OrcaSlicer's
-  defaults. The counts in the summary are only worth trusting if the lists behind
-  them can be read.
-- **A warning when the tool counts differ**, because that is where filament ends up
-  on the wrong extruder.
-
-**Opening an earlier conversion.** Converted projects are kept in a folder inside
-OrcaSlicer's own data directory, several levels down and awkward to reach. The tab
-lists them — newest first, with size and age — and opens one again with a click.
-
-**What the converter reads, and what it will not.** To rebuild a project it reads
-OrcaSlicer's **printer profile** — bed shape, machine limits, G-code, thermals, nozzle
-and extruder setup — because that is what the designer's machine has to be replaced
-with. The list of keys is OrcaSlicer's own published machine-option set, and nothing
-outside it is read.
-
-Connection settings are excluded from that list, and removed from any project that
-arrives carrying them. OrcaSlicer keeps the printer's address, user, password and API
-key among its printer options, and those are not machine geometry — they are how one
-particular machine is reached. A converted `.3mf` gets passed around; it must not
-carry someone's printer credentials inside it. If a project you convert had them, the
-report says which were removed rather than fixing it silently.
-
-The converter makes **no connection to your printer at all**. It never has, and the
-only network calls it makes are to MakerWorld, and only when you paste a link.
-
-**What is kept and what is replaced.** OrcaSlicer already knows which settings
-belong to a machine: `Preset::printer_options()` is that list, and the plugin uses
-it rather than a hand-written one. Every key the machine owns takes the selected
-printer's value; **every other key keeps the designer's**, so layer height, walls,
-infill pattern and density, shells, seam, supports, elephant-foot compensation,
-temperatures and colours all survive. The tab reports the counts and names the
-important ones, rather than asking you to take it on trust.
-
-Two details that matter:
-
-- **Per-extruder settings are resized to the project's own extruder count.** The
-  Creator 5 Pro models its four-slot material station as four extruders; writing
-  a four-entry array into a one-extruder project crashes OrcaSlicer on load, and
-  leaving the designer's `extruder_offset` in place shifts the part. Both are
-  handled.
-- **A machine setting the printer leaves at its default is dropped, not kept.**
-  Leaving the designer's value there would silently override your printer's own
-  default.
-
-**How the converted project reaches you.** The plugin API is read-only — there is
-no "load this file" call — so the tab hands the path to the *running* OrcaSlicer
-through the same message a second launch would send it (D-Bus on Linux,
-LaunchServices on macOS, `WM_COPYDATA` on Windows). The converted file is written
-to `converted/` beside the plugin. If that hand-off cannot be made, the tab says
-so and prints the path, and you can open it with **File → Open Project…**.
 
 ## What the printer will not do
 
@@ -294,7 +170,6 @@ Two honest limits:
 | `check_code` | LAN check code from the touchscreen. A credential — never commit it |
 | `leveling` | Default for "bed levelling before print" |
 | `poll_seconds` | Status poll interval, default 3 |
-| `bambu_token` | BambuCloud token, for downloading from MakerWorld. A credential — never commit it |
 
 Environment overrides, handy for testing: `FFC5_HOST`, `FFC5_PORT`,
 `FFC5_SERIAL`, `FFC5_CHECK_CODE`, `FFC5_BAMBU_TOKEN`.
@@ -318,22 +193,18 @@ worth knowing before you start:
   suffix on uploaded plugin files; `any` is its universal marker. Hence
   `flashforge-c5_any.py`.
 
-Publishing is then: connect the repo in **Shared Plugins → Edit plugin → GitHub
-publishing**, fill the portal metadata, and publish a GitHub Release. The upload
-runs over OIDC, so there is no token to store.
+Publishing is then: connect the repo in **Plugins → Shared → your plugin → Edit
+plugin → GitHub publishing** → `ben0551/orca-flashforge-c5` → **Connect**, fill the
+portal metadata, and publish a GitHub Release tagged `vX.Y.Z`.
+`.github/workflows/publish-orcacloud.yml` does the upload over OIDC, so there is no
+token to store: the tag becomes the version and the release notes become the
+changelog.
 
-**There is one workflow per plugin**, because the two versions move
-independently, and the release tag says which one is being published:
-
-| Plugin | Workflow | Release tag | Version published |
-|---|---|---|---|
-| `flashforge-c5` | `.github/workflows/publish-flashforge-c5.yml` | `flashforge-v1.2.0` | `1.2.0` |
-| `3mf-converter` | `.github/workflows/publish-3mf-converter.yml` | `3mf-v1.3.0` | `1.3.0` |
-
-Each workflow ignores a tag that is not its own, so tagging one plugin never
-republishes the other. Each plugin needs its **own** portal listing and its own
-connection; the plugin `name` in its metadata — `FlashForge Creator 5 Device Tab`,
-`3mf Converter` — is what tells them apart.
+**This repository holds exactly one plugin**, and that is not a preference: Orca
+Cloud connects a repository to exactly one of your plugins, and a run against a
+repository connected to none or to several fails with a 401. That is why the 3mf
+Converter lives in its own repository (`orca-3mf-converter`) instead of here — the
+two plugins release independently, so they cannot share one connection.
 
 ## Tests
 
@@ -341,24 +212,15 @@ connection; the plugin `name` in its metadata — `FlashForge Creator 5 Device T
 ./run_tests.sh
 ```
 
-Three suites, none needing OrcaSlicer or a printer. Two cover `flashforge-c5`,
-one covers `3mf-converter`:
+Two suites, neither needing OrcaSlicer or a printer:
 
-- `tests/test_plugin.py` runs the real `flashforge-c5` plugin against a mock Creator 5
+- `tests/test_plugin.py` runs the real plugin against a mock Creator 5
   (`tests/mock_printer.py`) and a stub `orca` module (`tests/fake_orca.py`), then
   drives the tab's message protocol exactly as the page's JavaScript does. It
   asserts on what the *printer* received — header casing, the `gcodeFile` part,
   the `fileSize` header, the extracted G-code bytes, the five-field mapping
   elements — not on what the plugin thinks it sent.
-- `tests/test_converter.py` runs the real `3mf Converter` plugin end to end: the URL
-  parsing, the download (against a stubbed transport, asserting the instance
-  endpoint and the bearer header), the conversion, the saved file and the hand-off
-  payload. The conversion is asserted key by key — that the designer's layer
-  height, infill pattern, supports, temperatures and colours are unchanged, that
-  the machine's limits, G-code and bed height replace theirs, that per-extruder
-  arrays are resized rather than copied, and that the archive's geometry comes
-  through byte for byte.
-- `tests/test_page_js.py` extracts **each** plugin's tab JavaScript and runs it under Node in
+- `tests/test_page_js.py` extracts the tab's JavaScript and runs it under Node in
   a DOM stub — the first against the plugin's real normalised `/detail` payload,
   the second against real conversion reports — checking the rendering, the button
   wiring, the file-row actions, and that a failure never replaces the report it
@@ -386,14 +248,9 @@ Verified by the test suites above:
   because `/control` answers `Success` to any command including ones it ignores.
 - The tab's rendering and message protocol, the file-row actions, and the printer
   agent's methods.
-- **The MakerWorld conversion, against a real MakerWorld download and real
-  OrcaSlicer.** A converted project was sliced by OrcaSlicer 2.4.2 with *no*
-  `--load-settings` override at all and came out as a FlashForge Creator 5 Pro
-  job — which is the point: the converted file has to carry the machine by itself,
-  the way opening it as a project does. A control run of the same file unconverted
-  sliced as a Bambu Lab P1P, with the designer's machine limits and G-code, and a
-  controlled edit proved the designer's values survive conversion while the
-  machine's replace theirs.
+- The camera frame parser, against the real printer's live MJPEG stream: every
+  frame a complete 640x480 baseline JPEG with a full scan, consecutive frames all
+  different, at roughly two frames a second.
 - **The camera frame parser, against the real printer.** Run over the live MJPEG
   stream from a Creator 5 Pro at `192.168.8.128:8080`: every frame a complete
   640×480 baseline JPEG with a full scan, consecutive frames all different — a
