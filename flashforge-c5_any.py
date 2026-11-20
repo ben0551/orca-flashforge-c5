@@ -23,9 +23,6 @@ Two capabilities, registered by one plugin:
 Only the Python standard library is used, so nothing has to be downloaded at
 plugin load time.
 
-The MakerWorld converter is a **separate** plugin (``3mf-converter``) so the two
-can be installed, updated and versioned independently.
-
 Author: Ben Fischer.  License: MIT.
 """
 

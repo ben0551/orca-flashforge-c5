@@ -4,8 +4,7 @@ name: Publish to OrcaCloud
 #
 # This repository holds exactly one plugin. Orca Cloud connects a repository to
 # exactly one of your plugins — a workflow run against a repository connected to
-# none, or to more than one, fails with a 401 — so the device tab and the 3mf
-# Converter live in two repositories and publish independently.
+# none, or to more than one, fails with a 401.
 #
 # The tag becomes the plugin version and must be a semantic version greater than
 # the version currently listed. Release notes become the changelog.

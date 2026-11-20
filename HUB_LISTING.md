@@ -3,9 +3,8 @@
 Copy-paste material for this plugin's page on the Orca Cloud hub, kept here so the
 listing text does not drift from the code.
 
-This repository holds **one** plugin. The 3mf Converter has its own repository
-(`orca-3mf-converter`) and its own listing, because Orca Cloud connects a repository
-to exactly one plugin.
+This repository holds **one** plugin, and Orca Cloud connects a repository to exactly
+one plugin.
 
 ## Checklist before publishing
 
@@ -24,8 +23,7 @@ tagged `vX.Y.Z`, publish it. `.github/workflows/publish-orcacloud.yml` uploads t
 file, the tag becomes the version, and the release notes become the changelog.
 
 **A repository connects to exactly one plugin.** Orca Cloud fails a run with a 401 if
-the repository is connected to none or to more than one, which is why the 3mf
-Converter is a separate repository rather than a second listing here.
+the repository is connected to none or to more than one.
 
 ## ⚠️ Read this first: the hub needs a Nightly build
 
@@ -173,7 +171,6 @@ The comparable FlashForge plugins, as of 2026-11-19:
 | `UshMask/flashforge-device-tab` | several printers | Device tab panel | MIT | **Read-only.** Single file, has docs and tests |
 | `monkyja/flashforge-connect` | Creator 5 Pro | Pages, **FlashForge cloud account** login (Linux keyring) | AGPL-3.0 | README states the full send "has not been validated with the real printer" |
 | `djvalic/kiln-orca` | AD5X only | IFS tool→slot mapping over Moonraker | GPL-3.0 | Requires Kiln OS custom firmware |
-| **ForgeBridge** (closed source) | MakerWorld / Printables / Creality Cloud / makeronline / Snapmaker Space → FlashForge | Web app + Chrome extension + an OrcaSlicer panel that converts a dragged `.3mf` | proprietary, free | The same conversion idea, and the one to beat on polish; Windows-only panel as of 2026-11 |
 
 Where this plugin stands apart:
 
@@ -186,12 +183,5 @@ Where this plugin stands apart:
   `flashforge-connect` says plainly that its send is unvalidated.
 - **The `.gcode.3mf` trap is handled.** OrcaSlicer exports a bundle this firmware
   lists and then refuses to print; the plugin extracts the inner G-code.
-- **The conversion and the printing are one plugin.** ForgeBridge converts and
-  hands you a project; you still need a way to get it to a FlashForge. Here the
-  same plugin owns the printer, so the converted project opens into the slicer
-  that is already talking to the machine.
-- **The conversion rule is OrcaSlicer's own.** Which settings belong to a machine
-  comes from `Preset::printer_options()`, not a hand-maintained key list, so the
-  kept/replaced split cannot quietly drift from what the slicer actually does.
 - **Permissive licence.** MIT against AGPL-3.0 and GPL-3.0, so it is usable in
   more contexts.

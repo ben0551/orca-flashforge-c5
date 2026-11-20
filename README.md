@@ -3,10 +3,6 @@
 Send prints to a FlashForge Creator 5 / 5 Pro from inside OrcaSlicer and watch the
 job there, instead of handing the file to FlashForge's own app or a web page.
 
-The 3mf Converter — which rebuilds a `.3mf` for the printer selected in OrcaSlicer —
-is a **separate plugin in a separate repository** (`orca-3mf-converter`). The two are
-installed, versioned and published independently.
-
 FlashForge's Creator 5 firmware exposes a complete local HTTP API on port 8898 —
 status, temperature, the material station, the stored file list, upload, start
 print, pause/resume/cancel, light — but the printer presents itself to a slicer as
@@ -200,11 +196,8 @@ portal metadata, and publish a GitHub Release tagged `vX.Y.Z`.
 token to store: the tag becomes the version and the release notes become the
 changelog.
 
-**This repository holds exactly one plugin**, and that is not a preference: Orca
-Cloud connects a repository to exactly one of your plugins, and a run against a
-repository connected to none or to several fails with a 401. That is why the 3mf
-Converter lives in its own repository (`orca-3mf-converter`) instead of here — the
-two plugins release independently, so they cannot share one connection.
+**A repository connects to exactly one plugin.** Orca Cloud fails a run with a 401 if
+the repository is connected to none, or to more than one.
 
 ## Tests
 
