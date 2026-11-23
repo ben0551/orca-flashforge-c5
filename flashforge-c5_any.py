@@ -513,6 +513,15 @@ class Creator5:
         response, last = None, None
         for attempt in range(CAM_OPEN_TRIES):
             time.sleep(CAM_WARMUP_S if attempt == 0 else CAM_RETRY_S)
+            # The firmware answers "Success" to a streamCtrl it did not act on, so
+            # the connect succeeding is the only proof the server is up. Re-issue
+            # the open between attempts: the first one can be lost, and without
+            # this every retry repeats a connect against a server nobody opened.
+            if attempt:
+                try:
+                    self.stream_ctrl(True)
+                except PrinterError:
+                    pass
             try:
                 response = urllib.request.urlopen(url, timeout=timeout)
                 break
@@ -520,8 +529,15 @@ class Creator5:
                 last = exc
         if response is None:
             self.stream_ctrl(False)
+            # Name the URL, and say when the credentials were missing: a closed
+            # connection means the stream was never opened, and an unset check
+            # code opens nothing.
+            hint = "" if self.check_code else (
+                " - the LAN check code is not set, so the printer acknowledges "
+                "streamCtrl but opens no stream")
             raise PrinterError(
-                f"Camera did not start ({type(last).__name__}: {last})")
+                f"Camera did not start at {url} "
+                f"({type(last).__name__}: {last}){hint}")
         try:
             for frame in mjpeg_frames(response.read):
                 yield frame

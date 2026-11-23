@@ -8,6 +8,7 @@ on the plugin's own idea of what it sent.
 import base64
 import json
 import re
+import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
@@ -260,9 +261,12 @@ class MockCamera:
     is only visible if the double notices.
     """
 
-    def __init__(self, frames=3, chunk=4096):
+    def __init__(self, frames=3, chunk=4096, fail_first=0):
         self.frames = frames
         self.chunk = chunk
+        # Connects that are closed with no reply at all, which is what the
+        # printer does when no stream was opened for this client.
+        self.fail_first = fail_first
         self.connects = 0
         self.disconnects = 0
         cam = self
@@ -273,6 +277,15 @@ class MockCamera:
 
             def do_GET(self):
                 cam.connects += 1
+                if cam.connects <= cam.fail_first:
+                    cam.disconnects += 1
+                    self.close_connection = True
+                    try:
+                        self.connection.shutdown(socket.SHUT_RDWR)
+                    except Exception:
+                        pass
+                    self.connection.close()
+                    return
                 try:
                     body = mjpeg_stream(cam.frames)
                     self.send_response(200)

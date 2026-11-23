@@ -432,6 +432,38 @@ def main():
                     raised = None
                 except plugin.PrinterError as exc:
                     raised = str(exc)
+                # The refusal is reported with the URL, so the next one is legible.
+                check("the refusal names the URL it could not open",
+                      "http://127.0.0.1:9/?action=stream" in raised, str(raised))
+                # And says so when the credential that opens the stream is absent.
+                printer.controls.clear()
+                plugin.DEFAULT_CAM_PORT = 9
+                nocode = plugin.Creator5("127.0.0.1", "SN123", "", port)
+                try:
+                    list(nocode.camera_frames())
+                    nocode_raised = None
+                except plugin.PrinterError as exc:
+                    nocode_raised = str(exc)
+                check("a missing check code is named as the reason",
+                      bool(nocode_raised) and "check code is not set" in nocode_raised,
+                      str(nocode_raised))
+
+                # A lost streamCtrl is recovered: the reader re-issues the open
+                # between attempts instead of repeating a doomed connect.
+                printer.controls.clear()
+                with MockCamera(frames=1, fail_first=2) as flaky:
+                    plugin.DEFAULT_CAM_PORT = flaky.port
+                    retry_client = plugin.Creator5("127.0.0.1", "SN123", "CODE9", port)
+                    got = list(retry_client.camera_frames())
+                    check("a streamCtrl lost on the first attempts is re-issued",
+                          len(got) == 1 and flaky.connects == 3,
+                          f"frames={len(got)} connects={flaky.connects}")
+                    opens = [c["payload"]["args"]["action"] for c in printer.controls]
+                    # one before the loop, then one per failed attempt
+                    check("and each retry re-issues the open",
+                          opens == ["open", "open", "open", "close"], str(opens))
+                plugin.DEFAULT_CAM_PORT = 9
+
                 check("a camera that never starts reports why",
                       bool(raised) and "did not start" in raised, str(raised))
                 check("a camera that never starts is still switched off",
