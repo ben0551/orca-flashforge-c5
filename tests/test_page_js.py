@@ -121,6 +121,9 @@ def main():
              not re.search(r"--(bg|panel|panel2|line)\s*:\s*#[0-9a-fA-F]{3,6}", page)),
             ("the primary button uses the accent's own foreground",
              "var(--orca-accent-fg" in page),
+            ("the page's buttons outrank the host's injected defaults",
+             "body button" in page
+             and re.search(r"(?<![\\w.#:>~ ])button\\s*\\{", page) is None),
         ]
         failed = 0
         for name, ok, *rest in checks:

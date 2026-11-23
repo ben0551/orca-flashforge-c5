@@ -34,7 +34,7 @@ Author: Ben Fischer.  License: MIT.
 # name = "FlashForge Creator 5 Device Tab"
 # description = "Send prints to a FlashForge Creator 5 / 5 Pro over LAN, watch the job and the camera inside OrcaSlicer."
 # author = "Ben Fischer"
-# version = "1.3.2"
+# version = "1.3.3"
 # ///
 
 import base64
@@ -980,12 +980,12 @@ PAGE = r"""
   #banner.info{border-color:var(--accent2);background:var(--bg);color:var(--accent2)}
   #banner button{margin-left:9px;padding:2px 9px;font-size:11px}
   .card.wanted{border-color:var(--accent2)}
-  button{background:var(--panel2);color:var(--fg);border:1px solid var(--line);
+  body button{background:var(--panel2);color:var(--fg);border:1px solid var(--line);
          border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer}
-  button:hover{border-color:var(--accent)}
-  button.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
-  button.primary:hover{filter:brightness(1.1)}
-  button:disabled{opacity:.45;cursor:not-allowed}
+  body button:hover{border-color:var(--accent)}
+  body button.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+  body button.primary:hover{filter:brightness(1.1)}
+  body button:disabled{opacity:.45;cursor:not-allowed}
   input[type=text],input[type=number],select{background:var(--bg);color:var(--fg);
         border:1px solid var(--line);border-radius:5px;padding:5px 7px;font-size:12px}
   input[type=text]{width:100%}
