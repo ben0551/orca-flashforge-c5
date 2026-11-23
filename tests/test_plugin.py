@@ -650,6 +650,25 @@ def main():
                   plugin.preset_connection() == ({}, []),
                   str(plugin.preset_connection()))
 
+            # What the store's review flags is the surface this reader touches.
+            # Pin both directions: it never asks for a key outside its own four,
+            # and an empty bundle forces the whole search path, so all four are
+            # actually reached. Nothing from the filament or process collections.
+            probe = fake_orca.FakePresetBundle(
+                printers=[fake_orca.FakePreset("A"), fake_orca.FakePreset("B")],
+                current=fake_orca.FakePreset("A"), full={})
+            orca_module.install_preset_bundle(probe)
+            plugin.preset_connection()
+            asked = set(probe.requested_full) | set(probe._current.requested)
+            for preset in probe._printers:
+                asked |= set(preset.requested)
+            own = {plugin.ORCA_KEY_HOST, plugin.ORCA_KEY_SERIAL,
+                   plugin.ORCA_KEY_CODE, plugin.ORCA_KEY_AGENT}
+            check("the preset reader touches nothing outside its own four keys",
+                  asked <= own, str(sorted(asked - own)))
+            check("and the whole search path reaches all four",
+                  asked == own, str(sorted(asked)))
+
             # Adopt into blanks only: a working configuration must not be
             # silently replaced by a preset the user may have left stale.
             orca_module.install_preset_bundle(orca_bundle)

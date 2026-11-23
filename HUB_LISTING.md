@@ -111,6 +111,19 @@ page.
 >   plugin zeroes the job block when the printer is idle rather than showing
 >   garbage.
 >
+> **What this plugin reads, in the terms a security review asks for it.** Exactly
+> four keys, and no others: the printer's address, its serial number, its LAN check
+> code, and the tag that marks a preset as belonging to this plugin. That is the
+> whole surface — it does not enumerate a preset, does not read filament or process
+> profiles, and writes nothing back into your configuration.
+>
+> One of those four keys is the printer's LAN check code, which OrcaSlicer keeps
+> under a generic print-host key shared by every vendor's host. That is why a
+> review sees a credential-shaped name in the source: this plugin needs the code
+> the slicer's own FlashForge integration uses, because you already typed it into
+> OrcaSlicer once. Nothing else is read, and the value goes nowhere except to your
+> printer.
+>
 > **Privacy.** Your serial number and LAN check code live in `settings.json`
 > beside the plugin at mode 0600, or in your OrcaSlicer printer preset if you had
 > already set one up — either way they are sent to nothing but your printer. This

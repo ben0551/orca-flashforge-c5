@@ -241,8 +241,10 @@ class FakePreset:
     def __init__(self, name="", **values):
         self.name = name
         self.values = dict(values)
+        self.requested = []          # every key asked of this preset
 
     def config_value(self, key):
+        self.requested.append(key)
         return self.values.get(key)
 
     def config_keys(self):
@@ -280,6 +282,7 @@ class FakePresetBundle:
         self._printers = list(printers or [])
         self._full = dict(full or {})
         self._current = current
+        self.requested_full = []     # every key asked of the resolved config
 
     @property
     def printers(self):
