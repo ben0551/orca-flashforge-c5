@@ -691,6 +691,47 @@ def main():
                   and plugin.load_settings()["serial"] == "SNORCA1",
                   json.dumps(forced["applied"]))
 
+            # --- the printer's settings must survive a plugin update --------
+            # Installed the way OrcaSlicer installs it: <datadir>/orca_plugins/<name>/
+            datadir = tempfile.mkdtemp(prefix="ffc5-datadir-")
+            plugdir = os.path.join(datadir, "orca_plugins", "flashforge-c5_any.py")
+            os.makedirs(plugdir)
+            shutil.copy2(os.path.join(ROOT, "flashforge-c5_any.py"),
+                         os.path.join(plugdir, "flashforge-c5_any.py"))
+            with open(os.path.join(plugdir, "settings.json"), "w", encoding="utf-8") as fh:
+                json.dump({"host": "10.0.0.77", "serial": "SNOLD",
+                           "check_code": "OLDCODE"}, fh)
+
+            spec = importlib.util.spec_from_file_location(
+                "ffc5_installed", os.path.join(plugdir, "flashforge-c5_any.py"))
+            installed = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(installed)
+
+            home = os.path.join(datadir, "orca_plugin_data", "flashforge-c5")
+            check("an installed plugin keeps settings beside orca_plugins, not in it",
+                  installed.settings_home() == home, installed.settings_home())
+            check("settings saved by an older version are still read",
+                  installed.load_settings()["serial"] == "SNOLD",
+                  str(installed.load_settings()))
+
+            ok, error = installed.save_settings({"host": "10.0.0.88"})
+            check("saving writes the durable copy",
+                  ok and json.load(open(os.path.join(home, "settings.json")))
+                  ["host"] == "10.0.0.88", error or "")
+
+            # An update replaces the plugin directory and nothing else.
+            shutil.rmtree(plugdir)
+            os.makedirs(plugdir)
+            shutil.copy2(os.path.join(ROOT, "flashforge-c5_any.py"),
+                         os.path.join(plugdir, "flashforge-c5_any.py"))
+            spec = importlib.util.spec_from_file_location(
+                "ffc5_updated", os.path.join(plugdir, "flashforge-c5_any.py"))
+            updated = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(updated)
+            check("the printer settings survive an update that replaces the plugin directory",
+                  updated.load_settings()["host"] == "10.0.0.88",
+                  str(updated.load_settings()))
+
             # The tab says where the values came from: a panel that fills itself
             # in silently is indistinguishable from one the user filled.
             plugin._SETTINGS_CACHE = {"host": "", "port": 8898, "serial": "",

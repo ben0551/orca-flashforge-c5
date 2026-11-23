@@ -28,6 +28,14 @@ works out what the plugin does and the tab is what you read while working.
   OrcaSlicer, you do not need to type any of it** — see *Reading OrcaSlicer's own
   printer settings* below.
 
+## Where the settings are kept
+
+The printer's address, serial number and LAN check code are stored in
+`settings.json` at `<OrcaSlicer data>/orca_plugin_data/flashforge-c5/`, **not** in
+the plugin's own directory. Installing a new plugin version replaces
+`orca_plugins/<plugin>/`, which took those settings with it. The old location is
+still read, so an update carries them over the first time you save again.
+
 ## Theme
 
 The tab follows OrcaSlicer: the page takes its background, text,
