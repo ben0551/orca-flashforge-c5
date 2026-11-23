@@ -34,7 +34,7 @@ Author: Ben Fischer.  License: MIT.
 # name = "FlashForge Creator 5 Device Tab"
 # description = "Send prints to a FlashForge Creator 5 / 5 Pro over LAN, watch the job and the camera inside OrcaSlicer."
 # author = "Ben Fischer"
-# version = "1.3.4"
+# version = "1.3.5"
 # ///
 
 import base64
