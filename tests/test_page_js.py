@@ -112,6 +112,15 @@ def main():
              'id="bcam"' in page and 'id="camimg"' in page),
             ("every element the script looks up is defined in the markup",
              not missing, str(missing)),
+            # OrcaSlicer injects these into every plugin page and puts
+            # data-orca-theme on <html>. The tab must follow the app, not pin a theme.
+            ("the page takes its surfaces from OrcaSlicer",
+             all(v in page for v in ("--orca-bg", "--orca-fg",
+                                     "--orca-border", "--orca-muted"))),
+            ("and no surface is hardcoded dark",
+             not re.search(r"--(bg|panel|panel2|line)\s*:\s*#[0-9a-fA-F]{3,6}", page)),
+            ("the primary button uses the accent's own foreground",
+             "var(--orca-accent-fg" in page),
         ]
         failed = 0
         for name, ok, *rest in checks:

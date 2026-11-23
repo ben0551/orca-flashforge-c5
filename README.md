@@ -28,6 +28,13 @@ works out what the plugin does and the tab is what you read while working.
   OrcaSlicer, you do not need to type any of it** — see *Reading OrcaSlicer's own
   printer settings* below.
 
+## Theme
+
+The tab follows OrcaSlicer: the page takes its background, text,
+border, muted text, accent and font from the variables OrcaSlicer injects into
+every plugin page, and it re-themes live when the app theme changes. It does not
+pin itself to dark.
+
 ## What you get
 
 | Capability | Type | What it does |

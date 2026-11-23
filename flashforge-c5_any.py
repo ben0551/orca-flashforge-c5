@@ -34,7 +34,7 @@ Author: Ben Fischer.  License: MIT.
 # name = "FlashForge Creator 5 Device Tab"
 # description = "Send prints to a FlashForge Creator 5 / 5 Pro over LAN, watch the job and the camera inside OrcaSlicer."
 # author = "Ben Fischer"
-# version = "1.3.1"
+# version = "1.3.2"
 # ///
 
 import base64
@@ -935,14 +935,28 @@ RUNTIME = Runtime()
 
 PAGE = r"""
 <style>
-  :root{
-    --bg:#1e1f22; --panel:#26282c; --panel2:#2d2f34; --line:#3a3d43;
-    --fg:#e6e6e6; --dim:#9aa0a6; --accent:#7cc36a; --accent2:#4a90d9;
-    --warn:#e0a030; --bad:#d9534f;
+  '':root{
+    /* Surfaces and text come from OrcaSlicer, so the tab follows the app's theme
+       instead of pinning itself to dark. OrcaSlicer injects these into every
+       plugin page (WebViewHostDialog::host_theme_vars_css) and puts
+       data-orca-theme="light"|"dark" on <html>. */
+    --bg:var(--orca-bg);
+    --panel:var(--orca-bg);      /* a panel is the page with a border, not a tint */
+    --panel2:var(--orca-bg);
+    --line:var(--orca-border);
+    --fg:var(--orca-fg);
+    --dim:var(--orca-muted);
+    --accent:var(--orca-accent);
+    --on-accent:var(--orca-accent-fg);
+    /* The remaining three are fixed accents rather than surfaces: a second blue,
+       amber and red, each picked to stay legible on both a light and a dark page. */
+    --accent2:#2f7fd1;
+    --warn:#a05a00;
+    --bad:#c0392b;
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--fg);
-       font:13px/1.45 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+       font:13px/1.45 var(--orca-font)}
   #wrap{padding:10px 12px 28px;max-width:1180px}
   .hidden{display:none !important}
   .row{display:flex;gap:10px;flex-wrap:wrap;align-items:stretch}
@@ -961,18 +975,18 @@ PAGE = r"""
         padding:1px 9px;font-size:11px;color:var(--dim)}
   #banner{border-radius:6px;padding:7px 10px;margin-bottom:10px;font-size:12px;
           border:1px solid var(--line);background:var(--panel2)}
-  #banner.err{border-color:var(--bad);background:#3a2323;color:#ffcdc9}
-  #banner.ok{border-color:var(--accent);background:#243322;color:#d5f2cc}
-  #banner.info{border-color:var(--accent2);background:#20303f;color:#cfe6ff}
+  #banner.err{border-color:var(--bad);background:var(--bg);color:var(--bad)}
+  #banner.ok{border-color:var(--accent);background:var(--bg);color:var(--accent)}
+  #banner.info{border-color:var(--accent2);background:var(--bg);color:var(--accent2)}
   #banner button{margin-left:9px;padding:2px 9px;font-size:11px}
   .card.wanted{border-color:var(--accent2)}
   button{background:var(--panel2);color:var(--fg);border:1px solid var(--line);
          border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer}
-  button:hover{border-color:#5a5f66}
-  button.primary{background:#2f5d2a;border-color:#3f7a38}
-  button.primary:hover{background:#376c31}
+  button:hover{border-color:var(--accent)}
+  button.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+  button.primary:hover{filter:brightness(1.1)}
   button:disabled{opacity:.45;cursor:not-allowed}
-  input[type=text],input[type=number],select{background:#1b1c1f;color:var(--fg);
+  input[type=text],input[type=number],select{background:var(--bg);color:var(--fg);
         border:1px solid var(--line);border-radius:5px;padding:5px 7px;font-size:12px}
   input[type=text]{width:100%}
   /* A file input keeps its own intrinsic width, which is wider than the column
@@ -985,11 +999,11 @@ PAGE = r"""
   label.chk{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--dim)}
   .kv{display:flex;justify-content:space-between;padding:2px 0;font-size:12px}
   .kv span:first-child{color:var(--dim)}
-  #bar{height:9px;background:#1b1c1f;border:1px solid var(--line);border-radius:99px;
+  #bar{height:9px;background:var(--orca-border);border:1px solid var(--line);border-radius:99px;
        overflow:hidden;margin:6px 0}
-  #bar>i{display:block;height:100%;width:0;background:linear-gradient(90deg,#4a90d9,#7cc36a);
+  #bar>i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent2),var(--accent));
          transition:width .25s}
-  .bar{height:7px;background:#1b1c1f;border:1px solid var(--line);border-radius:99px;overflow:hidden}
+  .bar{height:7px;background:var(--orca-border);border:1px solid var(--line);border-radius:99px;overflow:hidden}
   .bar>i{display:block;height:100%;width:0;background:var(--accent2)}
   .spools{display:flex;gap:8px;flex-wrap:wrap}
   .slot{background:var(--panel2);border:1px solid var(--line);border-radius:7px;
@@ -1003,7 +1017,7 @@ PAGE = r"""
   .tool{background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:8px 10px}
   .tool .t{font-size:11px;color:var(--dim);margin-bottom:5px}
   .files{max-height:230px;overflow:auto}
-  .frow{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid #2f3238}
+  .frow{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--line)}
   .frow:last-child{border-bottom:none}
   .fname{flex:1;font-size:12px;word-break:break-all}
   .fmeta{font-size:11px;color:var(--dim)}
@@ -1071,7 +1085,7 @@ PAGE = r"""
     </div>
     <div id="camwrap" class="hidden" style="margin-top:9px">
       <img id="camimg" alt="printer camera"
-           style="width:100%;max-width:520px;border:1px solid var(--line);border-radius:6px;background:#141518">
+           style="width:100%;max-width:520px;border:1px solid var(--line);border-radius:6px;background:var(--bg)">
       <div class="small dim" id="camnote" style="margin-top:4px">Starting the stream…</div>
     </div>
   </div>
@@ -1099,7 +1113,7 @@ PAGE = r"""
     <div id="prevwrap" class="hidden" style="margin-bottom:8px">
       <div class="small dim" id="prevname" style="margin-bottom:4px"></div>
       <img id="previmg" alt="plate preview"
-           style="width:110px;height:110px;image-rendering:auto;border:1px solid var(--line);border-radius:6px;background:#141518">
+           style="width:110px;height:110px;image-rendering:auto;border:1px solid var(--line);border-radius:6px;background:var(--bg)">
     </div>
     <div class="files" id="files"><span class="dim small">loading…</span></div>
   </div>
