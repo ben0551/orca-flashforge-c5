@@ -935,7 +935,7 @@ RUNTIME = Runtime()
 
 PAGE = r"""
 <style>
-  '':root{
+  :root{
     /* Surfaces and text come from OrcaSlicer, so the tab follows the app's theme
        instead of pinning itself to dark. OrcaSlicer injects these into every
        plugin page (WebViewHostDialog::host_theme_vars_css) and puts

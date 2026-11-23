@@ -121,6 +121,12 @@ def main():
              not re.search(r"--(bg|panel|panel2|line)\s*:\s*#[0-9a-fA-F]{3,6}", page)),
             ("the primary button uses the accent's own foreground",
              "var(--orca-accent-fg" in page),
+            # A stray character before :root makes the whole palette block dead CSS:
+            # every var() then resolves to nothing, so buttons lose their background
+            # and border while keeping the host's inherited text colour.
+            ("the palette block is a real :root rule",
+             re.search(r"(?m)^[ \t]*:root\{", page) is not None
+             and not re.search(r"(?m)^[ \t]*\S[^\n]*:root\{", page)),
             ("the page's buttons outrank the host's injected defaults",
              "body button" in page
              and re.search(r"(?<![\\w.#:>~ ])button\\s*\\{", page) is None),
