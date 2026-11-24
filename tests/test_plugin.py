@@ -619,6 +619,158 @@ def main():
                   and plugin.normalize_detail({"lightStatus": "close"})["light_on"] is False)
 
             # ---------------------------------------------------------------
+            print("\nMaintenance controls")
+            printer.control_noop = False
+            maint_client = plugin.Creator5(host, "SN123", "CODE9", port)
+
+            def last_control():
+                return printer.controls[-1]["payload"]
+
+            printer.controls.clear()
+            maint_client.calibrate(leveling=True)
+            check("levelling sends calibration_cmd with only its own field",
+                  last_control()["cmd"] == "calibration_cmd"
+                  and last_control()["args"] == {"levelingDetection": "open"},
+                  str(last_control()))
+            maint_client.calibrate(shaper=True)
+            check("the input shaper leaves levelling untouched",
+                  last_control()["args"] == {"vibrationCompensation": "open"},
+                  str(last_control()))
+            maint_client.shutdown_timer(60)
+            check("the shutdown timer carries its delay",
+                  last_control()["cmd"] == "delayClose_cmd"
+                  and last_control()["args"]
+                  == {"automaticShutdown": "open", "shutdownAfterTime": 60},
+                  str(last_control()))
+            maint_client.shutdown_timer(0)
+            check("zero minutes turns the timer off",
+                  last_control()["args"]
+                  == {"automaticShutdown": "close", "shutdownAfterTime": 0},
+                  str(last_control()))
+
+            # The stock Creator 5 firmware has no motion command at all, so the
+            # plugin must not pretend to offer one.
+            check("there is deliberately no axis, home or extrusion control",
+                  not any(hasattr(maint_client, n) for n in ("move", "jog", "home",
+                                                            "extrude")),
+                  [n for n in ("move", "jog", "home", "extrude")
+                   if hasattr(maint_client, n)])
+            check("and the tab tells the user there is nothing to jog",
+                  "nothing to jog" in plugin.PAGE,
+                  [l.strip() for l in plugin.PAGE.splitlines() if "jog" in l][:2])
+
+            printer.set(autoShutdown="open", autoShutdownTime=45)
+            d = plugin.normalize_detail(printer.detail())
+            check("the auto-shutdown setting is read back from /detail",
+                  d["auto_shutdown"] == "open" and d["auto_shutdown_time"] == 45,
+                  f"{d['auto_shutdown']} {d['auto_shutdown_time']}")
+            printer.set(autoShutdown="close", autoShutdownTime=0)
+
+            # The maintenance handler must refuse while anything is moving.
+            inbox2 = []
+            page.post_message = inbox2.append
+            plugin.RUNTIME.status = plugin.normalize_detail({"status": "printing"})
+            page.on_message({"type": "maintenance", "kind": "level"})
+            check("maintenance is refused while a print runs",
+                  any("must be idle" in (m.get("message") or "") for m in inbox2),
+                  str([m.get("message") for m in inbox2]))
+            plugin.RUNTIME.status = None
+
+            # ---------------------------------------------------------------
+            print("\nTemperature chart")
+            rt = plugin.Runtime()
+            base = 1700000000.0
+            first = rt.sample_temps({"nozzles": [{"temp": 200.0}], "bed": 60.0}, now=base)
+            second = rt.sample_temps({"nozzles": [{"temp": 201.0}], "bed": 61.0},
+                                     now=base + 1)
+            check("a sample lands once per interval, not on every poll",
+                  first is not None and second is None,
+                  f"{first} {second}")
+            third = rt.sample_temps({"nozzles": [{"temp": 202.0}], "bed": 62.0},
+                                    now=base + plugin.TEMP_SAMPLE_S)
+            check("and the series accumulates",
+                  third is not None and len(third) == 2, str(third))
+            pruned = rt.sample_temps({"nozzles": [{"temp": 203.0}], "bed": 63.0},
+                                     now=base + plugin.TEMP_HISTORY_S
+                                            + plugin.TEMP_SAMPLE_S + 1)
+            check("samples older than half an hour are dropped",
+                  pruned is not None and len(pruned) == 1
+                  and pruned[0]["t"] == int(base + plugin.TEMP_HISTORY_S
+                                            + plugin.TEMP_SAMPLE_S + 1),
+                  str(pruned))
+
+            # ---------------------------------------------------------------
+            print("\nPrint history and notifications")
+            hist = plugin.Runtime()
+            t0 = 1700000000.0
+            try:
+                os.remove(plugin.history_file())
+            except OSError:
+                pass
+            ready = plugin.normalize_detail({"status": "ready"})
+            printing = plugin.normalize_detail({"status": "printing",
+                                                "printFileName": "benchy.3mf"})
+            check("nothing is recorded before a print starts",
+                  hist.track_job(ready, now=t0) is None)
+            hist.track_job(printing, now=t0)
+            rec = hist.track_job(ready, now=t0 + 120)
+            check("a finished print becomes one record with its duration",
+                  rec and rec["name"] == "benchy.3mf" and rec["result"] == "finished"
+                  and rec["duration_s"] == 120, str(rec))
+            saved = json.load(open(plugin.history_file()))
+            check("and it is written to disk",
+                  [j["name"] for j in saved["jobs"]] == ["benchy.3mf"],
+                  str(saved["jobs"]))
+            totals = plugin.history_totals(saved["jobs"])
+            check("totals count jobs, time and success rate",
+                  totals["jobs"] == 1 and totals["print_seconds"] == 120
+                  and totals["success_pct"] == 100.0, str(totals))
+
+            hist.job_cancel_seen = True
+            hist.track_job(printing, now=t0 + 200)
+            cancelled = hist.track_job(ready, now=t0 + 260)
+            check("a cancel we sent is recorded as cancelled",
+                  cancelled["result"] == "cancelled", str(cancelled))
+
+            hist.track_job(printing, now=t0 + 300)
+            # An error is not an active state, so this tick both marks and closes
+            # the job -- which is exactly why the mark happens before the test.
+            errored = hist.track_job(plugin.normalize_detail({"status": "error"}),
+                                     now=t0 + 310)
+            check("an error state marks the job as failed",
+                  bool(errored) and errored["result"] == "error", str(errored))
+            final = plugin.history_totals(
+                json.load(open(plugin.history_file()))["jobs"])
+            check("the totals reflect every outcome",
+                  final["jobs"] == 3 and final["print_seconds"] == 190
+                  and final["success_pct"] == round(100.0 / 3, 1), str(final))
+
+            notifications = []
+
+            class _Levels:
+                RegularNotificationLevel = "regular"
+                WarningNotificationLevel = "warning"
+
+            class _UI:
+                NotificationLevel = _Levels
+
+                @staticmethod
+                def push_notification(level, text):
+                    notifications.append((level, text))
+
+            # The plugin holds its own reference from import time, which is not
+            # necessarily the latest object in sys.modules.
+            plugin.orca.host.ui = _UI
+            page._announce({"name": "benchy.3mf", "result": "finished"})
+            page._announce({"name": "benchy.3mf", "result": "error"})
+            check("a finished print raises a host notification",
+                  notifications[0][0] == "regular"
+                  and "Print finished" in notifications[0][1], str(notifications))
+            check("an error is raised as a warning",
+                  notifications[1][0] == "warning"
+                  and "Printer error" in notifications[1][1], str(notifications))
+
+            # ---------------------------------------------------------------
             # OrcaSlicer already holds the same three values. 2.5.0 ships a
             # FlashForge print host whose preset keys are print_host,
             # flashforge_serial_number and printhost_apikey, so the serial — the

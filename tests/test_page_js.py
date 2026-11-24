@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -87,7 +88,12 @@ def main():
 
         states_path = os.path.join(work, "states.json")
         with open(states_path, "w", encoding="utf-8") as fh:
-            json.dump({"idle": idle, "live": live}, fh, indent=1)
+            now = int(time.time())
+            idle = dict(idle, autoShutdown="close", autoShutdownTime=0)
+            json.dump({"idle": idle, "live": live,
+                       "temps": [{"t": now - 10, "n": 200.0, "b": 60.0},
+                                 {"t": now - 5, "n": 205.0, "b": 61.0},
+                                 {"t": now, "n": 210.0, "b": 62.0}]}, fh, indent=1)
 
         print("Page markup checks")
         missing = missing_elements(page, js)
@@ -110,6 +116,14 @@ def main():
              's.color_name' in js),
             ("the tab offers a live camera view",
              'id="bcam"' in page and 'id="camimg"' in page),
+            ("the maintenance card exists and says there is nothing to jog",
+             'id="blevel"' in page and 'id="bshaper"' in page
+             and 'id="btimer"' in page and "nothing to jog" in page),
+            ("the temperature chart and the history card exist",
+             'id="chart"' in page and 'id="hist"' in page
+             and 'id="hjobs"' in page and 'id="hrate"' in page),
+            ("the chart follows the theme rather than hardcoding colours",
+             'getPropertyValue("--accent")' in js),
             ("every element the script looks up is defined in the markup",
              not missing, str(missing)),
             # OrcaSlicer injects these into every plugin page and puts

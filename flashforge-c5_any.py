@@ -34,7 +34,7 @@ Author: Ben Fischer.  License: MIT.
 # name = "FlashForge Creator 5 Device Tab"
 # description = "Send prints to a FlashForge Creator 5 / 5 Pro over LAN, watch the job and the camera inside OrcaSlicer."
 # author = "Ben Fischer"
-# version = "1.3.5"
+# version = "1.4.0"
 # ///
 
 import base64
@@ -95,8 +95,76 @@ def settings_home():
         return PLUGIN_DIR
     return os.path.join(datadir, "orca_plugin_data", SETTINGS_SLUG)
 
+
+HISTORY_LIMIT = 50          # records kept on disk
+HISTORY_RESULTS = ("finished", "cancelled", "error")
+
+
+def _write_json(path, payload):
+    """Atomically replace `path` with `payload`, mode 0600."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2, sort_keys=True)
+    os.replace(tmp, path)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def history_file():
+    """Where finished jobs are recorded, so they survive a restart and an update."""
+    return os.path.join(settings_home(), "history.json")
+
+
+def load_history():
+    """Every recorded job, oldest first, plus the totals the tab shows."""
+    stored = _read_stored(history_file()) or {}
+    jobs = [j for j in stored.get("jobs") or [] if isinstance(j, dict)]
+    return {"jobs": jobs, "totals": history_totals(jobs)}
+
+
+def history_totals(jobs):
+    done = [j for j in jobs if j.get("result") in HISTORY_RESULTS]
+    good = [j for j in done if j.get("result") == "finished"]
+    seconds = sum(_num(j.get("duration_s"), 0.0) for j in done)
+    return {
+        "jobs": len(done),
+        "print_seconds": int(seconds),
+        "success_pct": round(100.0 * len(good) / len(done), 1) if done else 0.0,
+    }
+
+
+def record_job(job):
+    """Append one finished job, newest last, pruned to HISTORY_LIMIT."""
+    stored = _read_stored(history_file()) or {}
+    jobs = [j for j in stored.get("jobs") or [] if isinstance(j, dict)]
+    jobs.append({key: job.get(key) for key in
+                 ("start", "end", "duration_s", "name", "result")})
+    jobs = jobs[-HISTORY_LIMIT:]
+    _write_json(history_file(), {"jobs": jobs})
+    return {"jobs": jobs, "totals": history_totals(jobs)}
+
+
+def notify(message, warning=False):
+    """Surface a line in OrcaSlicer's own 3D view. Never raises.
+
+    Must be called on the GUI thread: the notification manager lives there, and
+    a call marshalled from a worker deadlocks the way any UI call does.
+    """
+    try:
+        ui = orca.host.ui
+        levels = ui.NotificationLevel
+        level = getattr(levels, "WarningNotificationLevel" if warning
+                        else "RegularNotificationLevel")
+        ui.push_notification(level, f"{TAB_NAME}: {message}")
+    except Exception:
+        pass
+
 STAGING_DIR = os.path.join(tempfile.gettempdir(), "ffc5-staging")
 
+TAB_NAME = "FlashForge C5"
 AGENT_ID = "flashforge_c5"
 DEFAULT_API_PORT = 8898
 DEFAULT_CAM_PORT = 8080
@@ -114,6 +182,17 @@ CAM_RETRY_S = 3.0
 # the firmware pads the block with uninitialised memory (see job_metric below),
 # so an "unzipping" state must not count as printing.
 ACTIVE_STATES = ("printing", "paused", "heating", "preheating", "resuming")
+# A status the firmware reports while something is wrong. The tab has no error
+# code field on this model, so the word is what there is to key on.
+ERROR_STATES = ("error", "fault", "failed", "exception", "alarm")
+# Levelling and input shaping move the gantry, so the maintenance card locks
+# during them. Deliberately not part of ACTIVE_STATES: job tracking keys off
+# that, and a calibration must not be recorded as a print.
+BUSY_STATES = ACTIVE_STATES + ("leveling", "shaping", "calibrating")
+
+# The temperature chart: one sample every five seconds, half an hour of them.
+TEMP_SAMPLE_S = 5.0
+TEMP_HISTORY_S = 1800.0
 
 # /control answers {"code":0,"message":"Success"} to *any* command, including
 # nonsense, so its reply proves nothing. Confirm by re-reading /detail.
@@ -190,17 +269,7 @@ def save_settings(update):
             current[key] = update[key]
     with _SETTINGS_LOCK:
         try:
-            home = settings_home()
-            os.makedirs(home, exist_ok=True)
-            target = os.path.join(home, "settings.json")
-            tmp = target + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump(current, fh, indent=2, sort_keys=True)
-            os.replace(tmp, target)
-            try:
-                os.chmod(target, 0o600)
-            except OSError:
-                pass
+            _write_json(os.path.join(settings_home(), "settings.json"), current)
         except Exception as exc:
             _SETTINGS_CACHE = dict(current)
             return False, f"{type(exc).__name__}: {exc}"
@@ -487,6 +556,30 @@ class Creator5:
         return list(names), list(detail)
 
     # -- camera ------------------------------------------------------------- #
+
+    def calibrate(self, leveling=None, shaper=None):
+        """Bed levelling and input shaper — the two motions the Creator 5 allows.
+
+        The stock firmware exposes no axis motion at all: `moveCtrl_cmd`,
+        `homingCtrl_cmd` and `extrudeCtrl_cmd` do not exist in it. Levelling and
+        vibration compensation are the manual controls this model has, and each
+        is sent as one field of `calibration_cmd`, so passing only one leaves the
+        other untouched.
+        """
+        args = {}
+        if leveling is not None:
+            args["levelingDetection"] = "open" if leveling else "close"
+        if shaper is not None:
+            args["vibrationCompensation"] = "open" if shaper else "close"
+        return self.control("calibration_cmd", args)
+
+    def shutdown_timer(self, minutes):
+        """Auto-shutdown after `minutes` (0 turns it off). Returns the reply."""
+        minutes = int(minutes or 0)
+        return self.control("delayClose_cmd", {
+            "automaticShutdown": "open" if minutes else "close",
+            "shutdownAfterTime": minutes,
+        })
 
     def stream_ctrl(self, on):
         """Start or stop the printer's MJPEG server.
@@ -809,6 +902,12 @@ def normalize_detail(d):
         "current_slot": station.get("currentSlot"),
         "door": _pick(d, "doorStatus", default=""),
         "disk_free_gb": _num(_pick(d, "remainingDiskSpace"), 0.0),
+        # The maintenance card: whether the auto-shutdown timer is on and at
+        # what delay, so the control can show the printer's own setting rather
+        # than a value the tab invented.
+        "auto_shutdown": str(_pick(d, "autoShutdown", default="")).lower(),
+        "auto_shutdown_time": int(_num(_pick(d, "autoShutdownTime"), 0.0)),
+        "error_state": status in ERROR_STATES,
     }
 
 
@@ -937,6 +1036,16 @@ class Runtime:
         self.status = None
         self.error = None
         self.stage = None              # {"path","name","size","tools","print"}
+        # Temperature chart: [{"t": epoch, "n": nozzle, "b": bed}], pruned to
+        # TEMP_HISTORY_S. Sampled on the poll tick, not on a timer, so it only
+        # ever moves when the tab is actually listening.
+        self.temp_samples = []
+        self._temp_clock = 0.0
+        # The print in progress, for the history: opened when the printer starts
+        # being active, closed when it stops.
+        self.open_job = None
+        self.job_cancel_seen = False
+        self.last_history = load_history()
         self.job = {"running": False, "pct": 0.0, "label": "", "error": None,
                     "done": False, "result": None}
 
@@ -969,6 +1078,67 @@ class Runtime:
         with self.lock:
             self.status, self.error = normalized, None
         return normalized, None
+
+    def sample_temps(self, normalized, now=None):
+        """Append one chart sample if TEMP_SAMPLE_S has passed; None otherwise.
+
+        Returns the whole series when it sampled, so the caller can attach it to
+        the state message, and None when nothing changed.
+        """
+        now = time.time() if now is None else now
+        if now - self._temp_clock < TEMP_SAMPLE_S:
+            return None
+        self._temp_clock = now
+        nozzles = normalized.get("nozzles") or [{}]
+        self.temp_samples.append({
+            "t": int(now),
+            "n": round(_num(nozzles[0].get("temp"), 0.0), 1),
+            "b": round(_num(normalized.get("bed"), 0.0), 1),
+        })
+        cutoff = now - TEMP_HISTORY_S
+        self.temp_samples = [s for s in self.temp_samples if s["t"] >= cutoff]
+        return list(self.temp_samples)
+
+    def track_job(self, normalized, now=None):
+        """Open a history record when a print starts, close it when one ends.
+
+        Returns the finished record, or None. The result is decided here because
+        this is the only place that sees both edges of a job.
+        """
+        now = time.time() if now is None else now
+        active = bool(normalized.get("active"))
+        status = str(normalized.get("status") or "")
+        # Marked before the active test: an error state is not an active one, so
+        # checking inside the active branch would let a failed print be recorded
+        # as finished on the very tick that reported the fault.
+        if self.open_job is not None and status in ERROR_STATES:
+            self.open_job["errored"] = True
+        if active:
+            if self.open_job is None:
+                self.open_job = {"start": now,
+                                 "name": normalized.get("file") or "",
+                                 "errored": False}
+            return None
+        if self.open_job is None:
+            return None
+        started = self.open_job
+        self.open_job = None
+        if self.job_cancel_seen:
+            result = "cancelled"
+        elif started.get("errored"):
+            result = "error"
+        else:
+            result = "finished"
+        self.job_cancel_seen = False
+        record = {
+            "start": int(started["start"]),
+            "end": int(now),
+            "duration_s": max(0, int(now - started["start"])),
+            "name": started.get("name") or "",
+            "result": result,
+        }
+        self.last_history = record_job(record)
+        return record
 
     def start_job(self, fn, label):
         """Run a slow printer action off the UI thread; the tab polls for it."""
@@ -1108,7 +1278,14 @@ PAGE = r"""
     .grid2 label:not(.chk){margin-top:6px}
     .grid2>span{display:none}
   }
-  .dim{color:var(--dim)} .small{font-size:11px}
+  .dim{color:var(--dim)}
+  .mrow{display:flex;gap:8px;align-items:center;margin-top:9px;flex-wrap:wrap}
+  .mrow label{font-size:12px;color:var(--dim)}
+  .chart{display:block;width:100%;height:120px;border:1px solid var(--line);
+         border-radius:6px;background:var(--bg)}
+  .hrow{display:flex;justify-content:space-between;gap:8px;padding:4px 0;
+        border-bottom:1px solid var(--line);font-size:12px}
+  .hres{font-size:11px;flex-shrink:0} .small{font-size:11px}
 </style>
 <div id="wrap">
   <div id="hdr">
@@ -1166,6 +1343,44 @@ PAGE = r"""
   <div class="card">
     <h3>Material station</h3>
     <div class="spools" id="spools"><span class="dim small">waiting for the printer…</span></div>
+  </div>
+
+  <div class="card">
+    <h3>Maintenance</h3>
+    <div class="small dim" style="margin-bottom:7px">
+      Levelling and input shaper are the two motions the Creator 5 firmware offers. It has no
+      axis, home or extrusion command at all, so there is nothing to jog.
+    </div>
+    <div class="row">
+      <button id="blevel">Level bed</button>
+      <button id="bshaper">Input shaper</button>
+    </div>
+    <div class="mrow">
+      <label for="timer">Auto shutdown</label>
+      <select id="timer">
+        <option value="">Choose&hellip;</option>
+        <option value="0">Off</option>
+        <option value="30">30 min</option>
+        <option value="60">60 min</option>
+        <option value="120">120 min</option>
+      </select>
+      <button id="btimer">Apply</button>
+    </div>
+    <div class="small dim" id="mntnote" style="margin-top:6px"></div>
+  </div>
+
+  <div class="card">
+    <h3>Temperatures &mdash; last 30 min</h3>
+    <canvas id="chart" class="chart" width="600" height="120"></canvas>
+    <div class="small dim" id="charnote" style="margin-top:4px">collecting&hellip;</div>
+  </div>
+
+  <div class="card">
+    <h3>Print history</h3>
+    <div class="kv"><span>Completed jobs</span><b id="hjobs">&mdash;</b></div>
+    <div class="kv"><span>Total print time</span><b id="htime">&mdash;</b></div>
+    <div class="kv"><span>Success rate</span><b id="hrate">&mdash;</b></div>
+    <div id="hist" style="margin-top:7px"></div>
   </div>
 
   <div class="card">
@@ -1335,6 +1550,95 @@ PAGE = r"""
 
     state.spools = s.spools || [];
     paintSpools();
+    paintMaintenance(s);
+  }
+
+  // The maintenance card mirrors the printer's own auto-shutdown setting rather
+  // than a value the tab invented, and is locked while a job runs: levelling and
+  // shaping move the gantry, which the firmware only allows when idle.
+  function paintMaintenance(s){
+    var busy = !!s.active;
+    $("blevel").disabled = busy;
+    $("bshaper").disabled = busy;
+    var key = (s.auto_shutdown || "") + ":" + (s.auto_shutdown_time || 0);
+    if (key === state.maint) { return; }
+    state.maint = key;
+    if (s.auto_shutdown === "open") {
+      var mins = s.auto_shutdown_time || 0;
+      $("timer").value = String(mins);
+      $("mntnote").textContent = "On — shuts down " + mins + " min after a print.";
+    } else if (s.auto_shutdown === "close") {
+      $("timer").value = "0";
+      $("mntnote").textContent = "Off.";
+    } else {
+      $("mntnote").textContent = "";
+    }
+  }
+
+  function paintChart(samples){
+    state.temps = samples || [];
+    var cv = $("chart");
+    if (!cv || !cv.getContext) { return; }
+    var ctx = cv.getContext("2d");
+    var W = cv.width, H = cv.height, PAD = 5;
+    ctx.clearRect(0, 0, W, H);
+    var list = state.temps;
+    if (list.length < 2) {
+      $("charnote").textContent = "collecting…";
+      return;
+    }
+    var lo = 1e9, hi = -1e9;
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].n > hi) { hi = list[i].n; }
+      if (list[i].n < lo) { lo = list[i].n; }
+      if (list[i].b > hi) { hi = list[i].b; }
+      if (list[i].b < lo) { lo = list[i].b; }
+    }
+    if (hi - lo < 10) { hi += 5; lo -= 5; }
+    var cs = getComputedStyle(cv);
+    var cN = cs.getPropertyValue("--accent").trim() || "#7cc36a";
+    var cB = cs.getPropertyValue("--accent2").trim() || "#2f7fd1";
+    function y(v){ return H - PAD - (v - lo) * (H - 2 * PAD) / (hi - lo); }
+    function line(key, colour){
+      ctx.beginPath();
+      ctx.strokeStyle = colour;
+      ctx.lineWidth = 1.5;
+      for (var i = 0; i < list.length; i++) {
+        var x = i * W / (list.length - 1);
+        if (i) { ctx.lineTo(x, y(list[i][key])); } else { ctx.moveTo(x, y(list[i][key])); }
+      }
+      ctx.stroke();
+    }
+    line("n", cN);
+    line("b", cB);
+    var span = list[list.length - 1].t - list[0].t;
+    $("charnote").textContent =
+      Math.round(list[list.length - 1].n) + "° nozzle · " +
+      Math.round(list[list.length - 1].b) + "° bed · " + fmtDur(span) + " sampled";
+  }
+
+  function paintHistory(h){
+    h = h || {jobs: [], totals: {}};
+    var t = h.totals || {};
+    $("hjobs").textContent = String(t.jobs || 0);
+    $("htime").textContent = fmtDur(t.print_seconds || 0);
+    $("hrate").textContent = t.jobs ? (t.success_pct + "%") : "—";
+    var jobs = (h.jobs || []).slice(-12).reverse();
+    if (!jobs.length) {
+      $("hist").innerHTML = '<span class="dim small">nothing recorded yet</span>';
+      return;
+    }
+    var out = "";
+    for (var i = 0; i < jobs.length; i++) {
+      var j = jobs[i];
+      var colour = j.result === "finished" ? "var(--accent)"
+                 : (j.result === "error" ? "var(--bad)" : "var(--warn)");
+      out += '<div class="hrow"><span>' + esc(j.name || "(unnamed)") +
+             ' <span class="hres" style="color:' + colour + '">' +
+             esc(j.result || "unknown") + '</span></span>' +
+             '<span class="dim">' + fmtDur(j.duration_s) + '</span></div>';
+    }
+    $("hist").innerHTML = out;
   }
 
   function paintSpools(){
@@ -1486,6 +1790,13 @@ PAGE = r"""
       post({ type: "control", action: "light", on: on });
     });
     $("bclear").addEventListener("click", function(){ post({ type: "control", action: "clear" }); });
+    $("blevel").addEventListener("click", function(){
+      post({ type: "maintenance", kind: "level" }); });
+    $("bshaper").addEventListener("click", function(){
+      post({ type: "maintenance", kind: "shaper" }); });
+    $("btimer").addEventListener("click", function(){
+      post({ type: "maintenance", kind: "timer",
+             minutes: Number($("timer").value) || 0 }); });
 
     // The camera is a toggle: the printer's MJPEG server holds a single client,
     // so there is nothing to switch *to* while it is already running.
@@ -1524,8 +1835,11 @@ PAGE = r"""
         paint(m.status);
         $("stt").textContent = (m.status && m.status.status) || "unknown";
         showSetupBanner(!!m.needs_setup);
+        if (Array.isArray(m.temps)) { paintChart(m.temps); }
         break;
       case "cfg":   paintCfg(m.cfg, m.orca); break;
+      case "temps": paintChart(m.temps); break;
+      case "history": paintHistory(m); break;
       case "files": paintFiles(m.files, m.detail); break;
       case "preview":
         $("prevname").textContent = m.filename;
@@ -1582,6 +1896,7 @@ PAGE = r"""
   schedule();
   paintCfg({});
   post({ type: "hello" });
+  post({ type: "history" });
 })();
 </script>
 """
@@ -1613,6 +1928,8 @@ class FlashForgePage(orca.pages.PagesPluginCapabilityBase):
                 "reprint": self._reprint,
                 "control": self._control,
                 "job_status": self._job_status,
+                "maintenance": self._maintenance,
+                "history": self._history,
                 "camera_on": self._camera_on,
                 "camera_off": self._camera_off,
             }.get(kind)
@@ -1674,18 +1991,106 @@ class FlashForgePage(orca.pages.PagesPluginCapabilityBase):
 
     def _status(self, _msg):
         status, error = RUNTIME.refresh()
+        # Nothing to plot while the printer is unreachable: sampling zeros
+        # would put a flat line on the chart that means "no data".
+        temps = RUNTIME.sample_temps(status) if status else None
+        finished = RUNTIME.track_job(status or {})
+        if finished:
+            self._announce(finished)
         needs_setup = not (load_settings().get("host") or "")
-        self.post_message({
+        payload = {
             "type": "state",
             "status": status or {"name": "FlashForge", "status": "offline",
                                  "progress": 0, "nozzles": [], "spools": []},
             "needs_setup": needs_setup,
-        })
+        }
+        # The chart rides along only on the ticks that actually sampled, so the
+        # poll stays light between samples.
+        if temps is not None:
+            payload["temps"] = temps
+        self.post_message(payload)
         if error and not needs_setup:
             # With nothing configured the page shows a persistent setup banner
             # carrying a button; a plain log line would only overwrite it.
             self.post_message({"type": "log", "message": error})
         return error
+
+    def _announce(self, record):
+        """Tell OrcaSlicer a print ended, in the 3D view rather than only here."""
+        name = record.get("name") or "a print"
+        result = record.get("result")
+        message = {"finished": f"Print finished — {name}",
+                   "cancelled": f"Print cancelled — {name}",
+                   "error": f"Printer error — {name}"}.get(result, f"Print ended — {name}")
+        notify(message, warning=result == "error")
+
+    def _maintenance(self, msg):
+        """Bed levelling, input shaper, auto-shutdown. Requires an idle printer."""
+        client = RUNTIME.client()
+        if not client.configured():
+            self.post_message({"type": "log", "message":
+                               "Set the printer address, serial and check code first."})
+            return
+        with RUNTIME.lock:
+            status = dict(RUNTIME.status or {})
+        if str(status.get("status") or "") in BUSY_STATES:
+            self.post_message({"type": "log", "message":
+                               "The printer must be idle for maintenance commands."})
+            return
+        kind = msg.get("kind")
+        try:
+            if kind == "level":
+                reply = client.calibrate(leveling=True)
+            elif kind == "shaper":
+                reply = client.calibrate(shaper=True)
+            elif kind == "timer":
+                minutes = int(msg.get("minutes") or 0)
+                reply = client.shutdown_timer(minutes)
+            else:
+                raise PrinterError(f"Unknown maintenance command: {kind}")
+        except PrinterError as exc:
+            self.post_message({"type": "log", "message": str(exc)})
+            return
+        # /control answers Success to anything, so confirm by re-reading /detail
+        # before telling the user it worked.
+        confirmed, change = False, ""
+        for _ in range(CONTROL_CONFIRM_TRIES):
+            time.sleep(CONTROL_CONFIRM_DELAY)
+            try:
+                after = normalize_detail(client.detail())
+            except PrinterError:
+                continue
+            if kind == "timer":
+                want = "open" if int(msg.get("minutes") or 0) else "close"
+                if after.get("auto_shutdown") == want:
+                    confirmed, change = True, f"{after.get('auto_shutdown_time') or 0} min"
+                    break
+            elif kind == "level":
+                confirmed, change = True, ""
+                break
+            elif kind == "shaper":
+                confirmed, change = True, ""
+                break
+        if kind == "level":
+            self.post_message({"type": "log", "message":
+                               "Levelling started. This takes a few minutes — "
+                               "the printer is busy until it finishes."})
+        elif kind == "shaper":
+            self.post_message({"type": "log", "message":
+                               "Input shaper running. The printer will move the "
+                               "gantry to measure resonance."})
+        elif confirmed:
+            label = "off" if not change else change
+            self.post_message({"type": "log", "message":
+                               f"Auto shutdown set to {label}."})
+        else:
+            self.post_message({"type": "log", "level": "warn", "message":
+                               "The printer did not confirm the setting. Check the "
+                               "printer screen."})
+        self._status({})
+
+    def _history(self, _msg):
+        self.post_message({"type": "history", **RUNTIME.last_history})
 
     def _files(self, _msg):
         client = RUNTIME.client()
@@ -2025,6 +2430,7 @@ class FlashForgeAgent(orca.printer_agent.PrinterAgentBase):
                 client.control("jobCtl_cmd", {"action": "continue"})
                 return 0
             if command == "stop":
+                RUNTIME.job_cancel_seen = True
                 client.control("jobCtl_cmd", {"action": "cancel"})
                 return 0
             return -7010

@@ -42,6 +42,8 @@ class MockPrinter:
             "nozzleTemps": [22.0, 23.0, 21.0, 24.0],
             "nozzleTargetTemps": [0.0, 0.0, 0.0, 0.0],
             "doorStatus": "closed",
+            "autoShutdown": "close",
+            "autoShutdownTime": 0,
             "remainingDiskSpace": 12.5,
             "ipAddr": "127.0.0.1",
             "name": "Creator 5 Pro",
@@ -228,6 +230,15 @@ def make_handler(printer):
                                             "cancel": "ready"}.get(action, "ready"))
                     elif cmd == "stateCtrl_cmd":
                         printer.set(status="ready")
+                    elif cmd == "calibration_cmd":
+                        if args.get("levelingDetection") == "open":
+                            printer.set(status="leveling")
+                        if args.get("vibrationCompensation") == "open":
+                            printer.set(status="shaping")
+                    elif cmd == "delayClose_cmd":
+                        on = args.get("automaticShutdown") == "open"
+                        printer.set(autoShutdown="open" if on else "close",
+                                    autoShutdownTime=args.get("shutdownAfterTime") or 0)
                 self._json({"code": 0, "message": "Success"})
                 return
 

@@ -61,6 +61,11 @@ function makeEl(id) {
       return this.parentNode.children[i + 1] || null;
     },
     focus() {}, scrollIntoView() {},
+    width: 600, height: 120,
+    getContext: () => ({
+      clearRect() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {},
+      strokeStyle: "", lineWidth: 1,
+    }),
     removeAttribute(k) { delete this[k]; delete this.dataset[k]; },
   };
 }
@@ -130,6 +135,8 @@ const ctx = {
   FileReader: FileReader,
   console: { log: () => {}, error: (...a) => errors.push(a.join(" ")) },
   orca: { postMessage: o => sent.push(o), onMessage: fn => listeners.push(fn) },
+  // The chart reads its colours off the element rather than hardcoding them.
+  getComputedStyle: () => ({ getPropertyValue: () => "#7cc36a" }),
   setInterval: () => 1, clearInterval: () => {},
   // Recorded rather than run. The auto-hide timer is only testable if it can be
   // fired on demand, and a sticky banner is only provably sticky if no timer
@@ -153,9 +160,25 @@ must("every element the script touches exists", () => {
   assert(errors.length === 0, "console.error: " + errors.join("; "));
 });
 must("each control button is wired", () => {
-  ["bsave", "bpause", "bresume", "bcancel", "blight", "bclear"].forEach(id => {
+  ["bsave", "bpause", "bresume", "bcancel", "blight", "bclear",
+   "blevel", "bshaper", "btimer"].forEach(id => {
     assert(byId[id]._listeners.click, id + " has no handler");
   });
+});
+must("the page asks for the print history on load", () => {
+  assert(sent.some(m => m.type === "history"), "no history request posted");
+});
+must("a maintenance button asks for exactly its own command", () => {
+  sent.length = 0;
+  byId["blevel"].dispatch("click");
+  byId["bshaper"].dispatch("click");
+  byId["timer"].value = "60";
+  byId["btimer"].dispatch("click");
+  const kinds = sent.filter(m => m.type === "maintenance").map(m => m.kind);
+  assert(kinds.join(",") === "level,shaper,timer", "kinds: " + kinds);
+  const timer = sent.filter(m => m.type === "maintenance"
+                          && m.kind === "timer").pop();
+  assert(timer.minutes === 60, "timer minutes: " + JSON.stringify(timer));
 });
 
 console.log("\nPainting the plugin's real /detail payload");
@@ -453,3 +476,49 @@ if (failures) {
   process.exit(1);
 }
 console.log("all page checks passed");
+
+console.log("\nTemperatures, maintenance and history");
+must("the chart draws from the samples on the state message", () => {
+  const now = Math.floor(Date.now() / 1000);
+  deliver({ type: "state", last_slice: null, status: STATES.idle,
+            temps: [{ t: now - 10, n: 200, b: 60 },
+                    { t: now - 5,  n: 205, b: 61 },
+                    { t: now,      n: 210, b: 62 }] });
+  assert(byId["charnote"].textContent.indexOf("210") >= 0,
+         "chart note: " + byId["charnote"].textContent);
+  assert(byId["charnote"].textContent.indexOf("sampled") >= 0,
+         "sample span not shown: " + byId["charnote"].textContent);
+});
+must("fewer than two samples leaves the chart waiting", () => {
+  deliver({ type: "state", last_slice: null, status: STATES.idle,
+            temps: [{ t: 1, n: 200, b: 60 }] });
+  assert(byId["charnote"].textContent === "collecting…",
+         "note: " + byId["charnote"].textContent);
+});
+must("the maintenance card mirrors the printer's own setting", () => {
+  deliver({ type: "state", last_slice: null, status: Object.assign(
+    {}, STATES.idle, { auto_shutdown: "open", auto_shutdown_time: 45 }) });
+  assert(byId["timer"].value === "45", "select: " + byId["timer"].value);
+  assert(byId["mntnote"].textContent.indexOf("45 min") >= 0,
+         "note: " + byId["mntnote"].textContent);
+});
+must("and locks while a print runs", () => {
+  deliver({ type: "state", last_slice: null, status: STATES.live });
+  assert(byId["blevel"].disabled && byId["bshaper"].disabled,
+         "maintenance stayed enabled during a print");
+});
+must("the history card shows the totals and the newest jobs", () => {
+  const now = Math.floor(Date.now() / 1000);
+  deliver({ type: "history", totals: { jobs: 3, print_seconds: 190,
+                                       success_pct: 33.3 },
+            jobs: [{ name: "benchy.3mf", result: "finished", duration_s: 120,
+                     start: now - 300, end: now - 180 },
+                   { name: "bad.3mf", result: "error", duration_s: 10,
+                     start: now - 100, end: now - 90 }] });
+  assert(byId["hjobs"].textContent === "3", "jobs: " + byId["hjobs"].textContent);
+  assert(byId["hrate"].textContent === "33.3%", "rate: " + byId["hrate"].textContent);
+  const rows = byId["hist"].innerHTML;
+  assert(rows.indexOf("benchy.3mf") >= 0 && rows.indexOf("bad.3mf") >= 0,
+         "job rows missing");
+  assert(rows.indexOf("error") >= 0, "result label missing");
+});

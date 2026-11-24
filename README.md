@@ -47,7 +47,7 @@ pin itself to dark.
 
 | Capability | Type | What it does |
 |---|---|---|
-| **FlashForge C5** tab | `pages` | Live status, temperatures, the 4-slot material station, a **live camera view**, job progress, pause/resume/cancel, light and clear-platform, and the files stored on the printer with a plate **preview** and one-click **reprint**. |
+| **FlashForge C5** tab | `pages` | Live status, temperatures, a **30-minute temperature chart**, the 4-slot material station, a **live camera view**, job progress, pause/resume/cancel, light and clear-platform, **maintenance** (bed levelling, input shaper, auto-shutdown timer), a **print history** with totals that survives restarts, and the files stored on the printer with a plate **preview** and one-click **reprint**. When a print finishes, is cancelled or the printer reports an error, OrcaSlicer raises a notification in the 3D view. |
 | **FlashForge Creator 5** | `printer-connection` | Makes OrcaSlicer's own **Send to printer** / **Print** buttons work against the Creator 5. This is the sending path — the tab watches and drives the machine. |
 
 ## Install
@@ -110,6 +110,37 @@ Two things the plugin does that the raw API does not:
 - **The plate preview.** The firmware keeps a thumbnail beside every stored job
   and serves it from `/gcodeThumb`; the tab fetches it on demand and shows it
   inline.
+
+## Maintenance
+
+The Creator 5 firmware allows exactly two manual motions, and both are on the tab:
+**Level bed** (`calibration_cmd` / `levelingDetection`) and **Input shaper**
+(`calibration_cmd` / `vibrationCompensation`). **Auto shutdown** sets the
+firmware's own delay-off timer through `delayClose_cmd`, and the picker shows the
+printer's current setting rather than a value the tab invented.
+
+Both motion commands require an idle machine — the buttons lock while anything is
+running — and neither is confirmed by the reply: `/control` answers `Success` to
+anything it did not act on, so levelling and shaping are reported as started
+rather than confirmed, and the timer is re-read from `/detail` before the tab says
+it took.
+
+## Print history
+
+Every print the tab sees is recorded to
+`<OrcaSlicer data>/orca_plugin_data/flashforge-c5/history.json`: start, end,
+duration, file name and outcome. The totals count completed jobs, total print time
+and success rate. A job starts when the printer first reports an active state and
+ends when it stops; a cancel sent from the tab is recorded as *cancelled*, and an
+error state as *error*. The file lives beside `orca_plugins`, not inside it, so
+installing a new plugin version does not throw the history away.
+
+## Notifications
+
+Print finished, print cancelled and printer error raise a notification through
+`orca.host.ui.push_notification`, which appears in OrcaSlicer's 3D view — so the
+tab does not have to be open to notice. Errors use the warning level; everything
+else the regular one.
 
 ## What the printer will not do
 
