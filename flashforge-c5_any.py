@@ -34,7 +34,7 @@ Author: Ben Fischer.  License: MIT.
 # name = "FlashForge Creator 5 Device Tab"
 # description = "Send prints to a FlashForge Creator 5 / 5 Pro over LAN, watch the job and the camera inside OrcaSlicer."
 # author = "Ben Fischer"
-# version = "1.4.0"
+# version = "1.5.0"
 # ///
 
 import base64
@@ -118,11 +118,17 @@ def history_file():
     return os.path.join(settings_home(), "history.json")
 
 
-def load_history():
-    """Every recorded job, oldest first, plus the totals the tab shows."""
+def load_history(printer_id=None):
+    """Recorded jobs for one printer (or all of them), oldest first, with totals.
+
+    A record carrying no printer tag predates multi-printer support and belonged
+    to the only machine there was, so it counts for whichever printer asks.
+    """
     stored = _read_stored(history_file()) or {}
     jobs = [j for j in stored.get("jobs") or [] if isinstance(j, dict)]
-    return {"jobs": jobs, "totals": history_totals(jobs)}
+    tagged = [j for j in jobs
+              if not j.get("printer") or j.get("printer") == printer_id]
+    return {"jobs": tagged, "totals": history_totals(tagged)}
 
 
 def history_totals(jobs):
@@ -141,7 +147,7 @@ def record_job(job):
     stored = _read_stored(history_file()) or {}
     jobs = [j for j in stored.get("jobs") or [] if isinstance(j, dict)]
     jobs.append({key: job.get(key) for key in
-                 ("start", "end", "duration_s", "name", "result")})
+                 ("start", "end", "duration_s", "name", "result", "printer")})
     jobs = jobs[-HISTORY_LIMIT:]
     _write_json(history_file(), {"jobs": jobs})
     return {"jobs": jobs, "totals": history_totals(jobs)}
@@ -208,7 +214,117 @@ CHUNK_BYTES = 512 * 1024
 _SETTINGS_LOCK = threading.Lock()
 _SETTINGS_CACHE = None
 
-_SETTINGS_KEYS = ("host", "serial", "check_code", "port", "poll_seconds")
+_SETTINGS_KEYS = ("host", "serial", "check_code", "port", "poll_seconds",
+                  "name", "printers", "active")
+
+# The single-printer layout older versions wrote. Still read, so an upgrade
+# finds the printer the user already set up instead of asking again.
+LEGACY_PRINTER_ID = "legacy"
+PRINTER_FIELDS = ("name", "host", "port", "serial", "check_code", "poll_seconds")
+
+
+def printer_list(cfg=None):
+    """Every configured printer, oldest first, each with an id and a name."""
+    cfg = load_settings() if cfg is None else cfg
+    out = []
+    for index, raw in enumerate(cfg.get("printers") or []):
+        if not isinstance(raw, dict) or not raw.get("host"):
+            continue
+        entry = {key: raw.get(key) for key in PRINTER_FIELDS}
+        entry["id"] = str(raw.get("id") or f"p{index + 1}")
+        entry["name"] = entry["name"] or entry["host"]
+        entry["port"] = int(entry["port"] or DEFAULT_API_PORT)
+        entry["poll_seconds"] = int(entry["poll_seconds"] or 3)
+        out.append(entry)
+    if out:
+        return out
+    if cfg.get("host"):
+        entry = {key: cfg.get(key) for key in PRINTER_FIELDS}
+        entry["id"] = LEGACY_PRINTER_ID
+        entry["name"] = cfg.get("name") or cfg.get("host")
+        entry["port"] = int(entry["port"] or DEFAULT_API_PORT)
+        entry["poll_seconds"] = int(entry["poll_seconds"] or 3)
+        return [entry]
+    return []
+
+
+def active_printer(cfg=None):
+    """The selected printer, or the first one, or None when nothing is set up."""
+    cfg = load_settings() if cfg is None else cfg
+    printers = printer_list(cfg)
+    if not printers:
+        return None
+    wanted = str(cfg.get("active") or "")
+    for entry in printers:
+        if entry["id"] == wanted:
+            return entry
+    return printers[0]
+
+
+def new_printer_id():
+    return "p" + uuid.uuid4().hex[:8]
+
+
+def save_printer(data):
+    """Insert or update one printer from the tab. Returns (ok, error).
+
+    The selected printer is mirrored onto the old top-level keys as well, so an
+    older settings file and anything written against the single-printer layout
+    keep describing the machine that is selected.
+    """
+    cfg = load_settings()
+    entries = [dict(p) for p in printer_list(cfg)]
+    host = str(data.get("host") or "").strip()
+    if not host:
+        return False, "An address is required."
+    pid = str(data.get("id") or "").strip()
+    record = {
+        "id": pid or new_printer_id(),
+        "name": str(data.get("name") or "").strip() or host,
+        "host": host,
+        "port": int(data.get("port") or DEFAULT_API_PORT),
+        "serial": str(data.get("serial") or "").strip(),
+        "check_code": str(data.get("check_code") or "").strip(),
+        "poll_seconds": int(data.get("poll_seconds") or 3),
+    }
+    for index, entry in enumerate(entries):
+        if entry["id"] == record["id"]:
+            entries[index] = record
+            break
+    else:
+        entries.append(record)
+    update = {key: cfg.get(key) for key in _SETTINGS_KEYS}
+    update["printers"] = entries
+    update["active"] = record["id"]
+    update.update(_mirror(record))
+    return save_settings(update)
+
+
+def remove_printer(pid):
+    """Drop one printer; the first remaining becomes the selection."""
+    cfg = load_settings()
+    entries = [dict(p) for p in printer_list(cfg) if p["id"] != str(pid)]
+    update = {key: cfg.get(key) for key in _SETTINGS_KEYS}
+    update["printers"] = entries
+    if entries:
+        update["active"] = entries[0]["id"]
+        update.update(_mirror(entries[0]))
+    else:
+        update["active"] = ""
+        update.update({"host": "", "port": DEFAULT_API_PORT, "serial": "",
+                       "check_code": "", "poll_seconds": 3})
+    return save_settings(update)
+
+
+def _mirror(entry):
+    """Copy the active printer onto the old top-level keys.
+
+    Kept in step so anything written against the single-printer layout -- the
+    agent, the tab's own checks, an older settings file -- still reads the
+    printer that is selected.
+    """
+    return {key: entry.get(key) for key in
+            ("host", "port", "serial", "check_code", "poll_seconds")}
 
 
 def _default_settings():
@@ -1029,9 +1145,10 @@ def unwrap_for_printer(path, preferred_name=None):
 # --------------------------------------------------------------------------- #
 
 class Runtime:
-    """The live connection + the last status poll, shared by all capabilities."""
+    """The live connection + the last status poll for one printer."""
 
-    def __init__(self):
+    def __init__(self, entry=None):
+        self.entry = dict(entry or {})
         self.lock = threading.Lock()
         self.status = None
         self.error = None
@@ -1049,14 +1166,24 @@ class Runtime:
         self.job = {"running": False, "pct": 0.0, "label": "", "error": None,
                     "done": False, "result": None}
 
+    def config(self):
+        """This printer's settings.
+
+        An entry carries everything the connection needs; a Runtime built with
+        none (outside the tab, and in the tests) reads the file instead.
+        """
+        if self.entry.get("host"):
+            return self.entry
+        return load_settings()
+
     def client(self):
-        cfg = load_settings()
+        cfg = self.config()
         return Creator5(cfg.get("host") or "", cfg.get("serial") or "",
                         cfg.get("check_code") or "", cfg.get("port") or DEFAULT_API_PORT)
 
     def refresh(self, force=False):
         """Poll /detail. Skips the HTTP round trip when the host is down."""
-        cfg = load_settings()
+        cfg = self.config()
         host, port = cfg.get("host") or "", cfg.get("port") or DEFAULT_API_PORT
         if not host:
             with self.lock:
@@ -1136,6 +1263,7 @@ class Runtime:
             "duration_s": max(0, int(now - started["start"])),
             "name": started.get("name") or "",
             "result": result,
+            "printer": self.entry.get("id") or "",
         }
         self.last_history = record_job(record)
         return record
@@ -1169,7 +1297,68 @@ class Runtime:
         return True
 
 
-RUNTIME = Runtime()
+class Fleet:
+    """One Runtime per configured printer.
+
+    The runtimes are rebuilt from settings on each use so adding or removing a
+    printer takes effect without restarting OrcaSlicer, and a runtime keeps its
+    own chart, job record and history across the change.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.runtimes = {}
+
+    def sync(self):
+        cfg = load_settings()
+        with self._lock:
+            keep = {}
+            for entry in printer_list(cfg):
+                runtime = self.runtimes.get(entry["id"])
+                if runtime is None:
+                    runtime = Runtime(entry)
+                else:
+                    runtime.entry = dict(entry)
+                keep[entry["id"]] = runtime
+            self.runtimes = keep
+            return cfg
+
+    def active(self):
+        cfg = self.sync()
+        entry = active_printer(cfg) or {}
+        with self._lock:
+            return self.runtimes.get(entry.get("id")) or Runtime(entry)
+
+    def all(self):
+        cfg = self.sync()
+        with self._lock:
+            return [self.runtimes[e["id"]] for e in printer_list(cfg)]
+
+    def get(self, pid):
+        with self._lock:
+            return self.runtimes.get(str(pid))
+
+
+FLEET = Fleet()
+
+
+class _ActiveRuntime:
+    """Attribute access resolves to whichever printer is selected right now.
+
+    The tab's handlers are written against a single runtime, and with several
+    printers the selected one can change under them. Resolving at access time
+    keeps every path -- status, camera, files, job control -- acting on the
+    selected machine without threading an argument through all of them.
+    """
+
+    def __getattr__(self, name):
+        return getattr(FLEET.active(), name)
+
+    def __setattr__(self, name, value):
+        setattr(FLEET.active(), name, value)
+
+
+RUNTIME = _ActiveRuntime()
 
 
 # --------------------------------------------------------------------------- #
@@ -1285,7 +1474,14 @@ PAGE = r"""
          border-radius:6px;background:var(--bg)}
   .hrow{display:flex;justify-content:space-between;gap:8px;padding:4px 0;
         border-bottom:1px solid var(--line);font-size:12px}
-  .hres{font-size:11px;flex-shrink:0} .small{font-size:11px}
+  .hres{font-size:11px;flex-shrink:0}
+  .chk{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--dim)}
+  .frow{display:flex;align-items:center;gap:10px;padding:7px 0;
+        border-bottom:1px solid var(--line);font-size:12px;flex-wrap:wrap}
+  .frow:last-child{border-bottom:0}
+  .frow.current{border-left:2px solid var(--accent);padding-left:8px}
+  .frow .fname{flex:1;min-width:120px;font-weight:600;overflow-wrap:anywhere}
+  .frow .fmeta{color:var(--dim);font-size:11px;width:100%} .small{font-size:11px}
 </style>
 <div id="wrap">
   <div id="hdr">
@@ -1297,6 +1493,19 @@ PAGE = r"""
     <span class="small dim" id="stt">connecting…</span>
   </div>
   <div id="banner" class="hidden"></div>
+
+  <div class="card">
+    <div class="mrow" style="margin-top:0">
+      <label for="printer">Printer</label>
+      <select id="printer"></select>
+      <button id="badd">Add printer</button>
+      <button id="bremove">Remove this printer</button>
+      <span class="spacer"></span>
+      <label class="chk"><input type="checkbox" id="attention"> Needs attention</label>
+      <button id="bfleet">All printers</button>
+    </div>
+    <div id="fleet" class="hidden" style="margin-top:9px"></div>
+  </div>
 
   <div class="row">
     <div class="card grow">
@@ -1705,6 +1914,55 @@ PAGE = r"""
     }
   }
 
+  // The picker and the fleet both come from the same list. The picker chooses
+  // which printer the detailed cards describe; the fleet looks at all of them.
+  function paintPrinters(){
+    var list = state.printers || [];
+    var want = state.activePrinter || "";
+    var out = "";
+    for (var i = 0; i < list.length; i++) {
+      out += '<option value="' + esc(list[i].id) + '"' +
+             (list[i].id === want ? " selected" : "") + '>' +
+             esc(list[i].name || list[i].host) + '</option>';
+    }
+    $("printer").innerHTML = out;
+    $("bremove").disabled = list.length <= 1;
+  }
+
+  function paintFleet(rows){
+    state.fleet = rows || [];
+    var only = $("attention").checked;
+    var out = "", shown = 0;
+    for (var i = 0; i < state.fleet.length; i++) {
+      var r = state.fleet[i];
+      if (only && !r.attention) { continue; }
+      shown++;
+      var bits = [esc(r.status)];
+      if (r.file) { bits.push(esc(r.file)); }
+      var pct = (r.percent == null) ? "" : (r.percent + "%");
+      out += '<div class="frow' + (r.current ? " current" : "") + '">' +
+             '<span class="fname">' + esc(r.name || r.id) + '</span>' +
+             '<span class="dot ' + (r.error || r.attention ? "bad" : "ok") + '"></span>' +
+             '<span>' + pct + '</span>' +
+             '<button data-open="' + esc(r.id) + '">Open</button>' +
+             '<span class="fmeta">' + bits.join(" &middot; ") + '</span></div>';
+    }
+    $("fleet").innerHTML = out ||
+      '<span class="dim small">' +
+      (state.fleet.length ? "no printer needs attention" : "no printers configured") +
+      '</span>';
+    var opens = $("fleet").querySelectorAll("button[data-open]");
+    for (var j = 0; j < opens.length; j++) {
+      // The id is captured rather than read off `this`: the handler may be
+      // invoked with no receiver, and the row it belongs to is already known.
+      (function(pid){
+        opens[j].addEventListener("click", function(){
+          post({ type: "switch", id: pid });
+        });
+      })(opens[j].getAttribute("data-open"));
+    }
+  }
+
   function paintCfg(cfg, orca){
     state.cfg = cfg || {};
     $("host").value   = cfg.host || "";
@@ -1790,6 +2048,19 @@ PAGE = r"""
       post({ type: "control", action: "light", on: on });
     });
     $("bclear").addEventListener("click", function(){ post({ type: "control", action: "clear" }); });
+    $("printer").addEventListener("change", function(){
+      post({ type: "switch", id: $("printer").value }); });
+    $("badd").addEventListener("click", function(){ post({ type: "new_printer" }); });
+    $("bremove").addEventListener("click", function(){
+      post({ type: "remove_printer", id: state.activePrinter || "" }); });
+    $("bfleet").addEventListener("click", function(){
+      var f = $("fleet");
+      f.className = (f.className === "hidden") ? "" : "hidden";
+      if (f.className !== "hidden") { post({ type: "fleet" }); }
+    });
+    // The rows are kept, so toggling the filter re-renders what is already
+    // there rather than wiping the list.
+    $("attention").addEventListener("change", function(){ paintFleet(state.fleet); });
     $("blevel").addEventListener("click", function(){
       post({ type: "maintenance", kind: "level" }); });
     $("bshaper").addEventListener("click", function(){
@@ -1836,10 +2107,25 @@ PAGE = r"""
         $("stt").textContent = (m.status && m.status.status) || "unknown";
         showSetupBanner(!!m.needs_setup);
         if (Array.isArray(m.temps)) { paintChart(m.temps); }
+        if (Array.isArray(m.printers)) {
+          state.printers = m.printers;
+          state.activePrinter = m.activePrinter;
+          paintPrinters();
+        }
+        // The fleet is only worth polling while it is on screen.
+        if ($("fleet") && $("fleet").className !== "hidden") { post({ type: "fleet" }); }
         break;
-      case "cfg":   paintCfg(m.cfg, m.orca); break;
+      case "cfg":
+        paintCfg(m.cfg, m.orca);
+        if (Array.isArray(m.printers)) {
+          state.printers = m.printers;
+          state.activePrinter = m.activePrinter;
+          paintPrinters();
+        }
+        break;
       case "temps": paintChart(m.temps); break;
       case "history": paintHistory(m); break;
+      case "fleet": paintFleet(m.rows); break;
       case "files": paintFiles(m.files, m.detail); break;
       case "preview":
         $("prevname").textContent = m.filename;
@@ -1897,6 +2183,7 @@ PAGE = r"""
   paintCfg({});
   post({ type: "hello" });
   post({ type: "history" });
+  post({ type: "fleet" });
 })();
 </script>
 """
@@ -1930,6 +2217,10 @@ class FlashForgePage(orca.pages.PagesPluginCapabilityBase):
                 "job_status": self._job_status,
                 "maintenance": self._maintenance,
                 "history": self._history,
+                "new_printer": self._new_printer,
+                "fleet": self._fleet,
+                "switch": self._switch,
+                "remove_printer": self._remove,
                 "camera_on": self._camera_on,
                 "camera_off": self._camera_off,
             }.get(kind)
@@ -1996,13 +2287,15 @@ class FlashForgePage(orca.pages.PagesPluginCapabilityBase):
         temps = RUNTIME.sample_temps(status) if status else None
         finished = RUNTIME.track_job(status or {})
         if finished:
-            self._announce(finished)
+            self._announce(finished, (RUNTIME.entry or {}).get("name") or "")
         needs_setup = not (load_settings().get("host") or "")
         payload = {
             "type": "state",
             "status": status or {"name": "FlashForge", "status": "offline",
                                  "progress": 0, "nozzles": [], "spools": []},
             "needs_setup": needs_setup,
+            "printers": printer_list(),
+            "activePrinter": (active_printer() or {}).get("id"),
         }
         # The chart rides along only on the ticks that actually sampled, so the
         # poll stays light between samples.
@@ -2015,14 +2308,15 @@ class FlashForgePage(orca.pages.PagesPluginCapabilityBase):
             self.post_message({"type": "log", "message": error})
         return error
 
-    def _announce(self, record):
+    def _announce(self, record, printer_name=""):
         """Tell OrcaSlicer a print ended, in the 3D view rather than only here."""
         name = record.get("name") or "a print"
         result = record.get("result")
         message = {"finished": f"Print finished — {name}",
                    "cancelled": f"Print cancelled — {name}",
                    "error": f"Printer error — {name}"}.get(result, f"Print ended — {name}")
-        notify(message, warning=result == "error")
+        who = f"{TAB_NAME} · {printer_name}: " if printer_name else f"{TAB_NAME}: "
+        notify(who + message, warning=result == "error")
 
     def _maintenance(self, msg):
         """Bed levelling, input shaper, auto-shutdown. Requires an idle printer."""
@@ -2090,7 +2384,10 @@ class FlashForgePage(orca.pages.PagesPluginCapabilityBase):
         self._status({})
 
     def _history(self, _msg):
-        self.post_message({"type": "history", **RUNTIME.last_history})
+        entry = RUNTIME.entry or {}
+        history = load_history(entry.get("id"))
+        RUNTIME.last_history = history
+        self.post_message({"type": "history", **history})
 
     def _files(self, _msg):
         client = RUNTIME.client()
@@ -2120,8 +2417,28 @@ class FlashForgePage(orca.pages.PagesPluginCapabilityBase):
             "image": "data:image/png;base64," + base64.b64encode(png).decode("ascii"),
         })
 
+    def _cfg_payload(self, orca=None):
+        """The settings plus the printer list, so one message repaints both."""
+        cfg = load_settings()
+        payload = {"type": "cfg", "cfg": cfg,
+                   "printers": printer_list(cfg),
+                   "activePrinter": (active_printer(cfg) or {}).get("id")}
+        if orca is not None:
+            payload["orca"] = orca
+        return payload
+
+    def _new_printer(self, _msg):
+        """Clear the connection form for a printer that is not in the list yet.
+
+        No blank entry is stored: a printer with no address cannot be connected
+        to, and storing one would put an unreachable row in the picker.
+        """
+        self.post_message(self._cfg_payload())
+
     def _save_cfg(self, msg):
-        ok, error = save_settings({
+        ok, error = save_printer({
+            "id": (msg.get("id") or "").strip(),
+            "name": msg.get("name") or "",
             "host": (msg.get("host") or "").strip(),
             "port": int(msg.get("port") or DEFAULT_API_PORT),
             "serial": (msg.get("serial") or "").strip(),
@@ -2132,8 +2449,65 @@ class FlashForgePage(orca.pages.PagesPluginCapabilityBase):
             self.post_message({"type": "error",
                                "message": f"Could not save settings: {error}"})
             return
-        self.post_message({"type": "cfg", "cfg": load_settings()})
+        FLEET.sync()
+        self.post_message(self._cfg_payload())
         self._status({})
+
+    def _switch(self, msg):
+        """Select a different printer. Everything on the tab follows this."""
+        pid = str(msg.get("id") or "")
+        if not any(p["id"] == pid for p in printer_list()):
+            self.post_message({"type": "log", "message":
+                               "That printer is not in the list."})
+            return
+        ok, error = save_settings({"active": pid})
+        if not ok:
+            self.post_message({"type": "error",
+                               "message": f"Could not switch printer: {error}"})
+            return
+        FLEET.sync()
+        self.post_message(self._cfg_payload({"found": False}))
+        self._stop_camera()
+        self._status({})
+        self._files({})
+        self._history({})
+
+    def _remove(self, msg):
+        pid = str(msg.get("id") or "")
+        ok, error = remove_printer(pid)
+        if not ok:
+            self.post_message({"type": "error",
+                               "message": f"Could not remove that printer: {error}"})
+            return
+        FLEET.sync()
+        self.post_message(self._cfg_payload())
+        self._stop_camera()
+        self._status({})
+        self._files({})
+        self._history({})
+
+    def _fleet(self, _msg):
+        """Refresh every configured printer and report one compact row each."""
+        rows = []
+        for runtime in FLEET.all():
+            _, error = runtime.refresh()
+            status = runtime.status or {}
+            state_name = str(status.get("status") or "")
+            rows.append({
+                "id": runtime.entry.get("id"),
+                "name": runtime.entry.get("name") or "",
+                "current": runtime.entry.get("id")
+                           == (active_printer() or {}).get("id"),
+                "status": state_name or "offline",
+                "file": status.get("file") or "",
+                "percent": round(status.get("progress") or 0.0, 1),
+                "error": bool(error),
+                # What the fleet filter keys on: something is wrong, or a job
+                # is paused and waiting on a human.
+                "attention": bool(error) or status.get("error_state")
+                              or state_name == "paused",
+            })
+        self.post_message({"type": "fleet", "rows": rows})
 
     def _reprint(self, msg):
         filename = str(msg.get("filename") or "").strip()

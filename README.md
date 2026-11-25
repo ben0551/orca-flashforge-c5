@@ -142,6 +142,34 @@ Print finished, print cancelled and printer error raise a notification through
 tab does not have to be open to notice. Errors use the warning level; everything
 else the regular one.
 
+## Several printers
+
+Configure as many machines as you like. The picker at the top of the tab chooses which one
+the status, camera, file and job cards describe; **Add printer** clears the connection form
+for a new one and **Remove this printer** drops the selected one (it is disabled while only
+one remains).
+
+**All printers** opens the fleet: one compact row per machine showing its state, the file it
+is printing and its progress, with the selected row marked. **Needs attention** narrows it to
+printers that are unreachable, in an error state, or paused and waiting on someone. The fleet
+refreshes every configured printer when it is open, and stays quiet while it is closed.
+
+Settings live in `settings.json` under `<OrcaSlicer data>/orca_plugin_data/flashforge-c5/`:
+
+```json
+{"printers": [{"id": "p3f9c1", "name": "Studio", "host": "192.168.8.128",
+               "port": 8898, "serial": "…", "check_code": "…", "poll_seconds": 3}],
+ "active": "p3f9c1"}
+```
+
+A settings file written by an older version — one printer at the top level — is read as that
+single printer, so upgrading does not ask for the address again. The selected printer is also
+mirrored onto those old top-level keys, which keeps the printer agent and anything else
+written against the single-printer layout working unchanged.
+
+Print history is recorded per printer; a job record carries the id of the machine that
+produced it, and records predating multi-printer support count for whichever printer asks.
+
 ## What the printer will not do
 
 **A stored file cannot be downloaded.** The Creator 5's whole HTTP API is

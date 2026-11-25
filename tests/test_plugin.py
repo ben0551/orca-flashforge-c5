@@ -25,6 +25,11 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 
 import fake_orca                                     # noqa: E402
+
+
+def load_scoped(plugin):
+    return plugin.load_history("x")["jobs"]
+
 from mock_printer import (mjpeg_stream, MockCamera,    # noqa: E402
                           MockServer)
 
@@ -744,6 +749,117 @@ def main():
             check("the totals reflect every outcome",
                   final["jobs"] == 3 and final["print_seconds"] == 190
                   and final["success_pct"] == round(100.0 / 3, 1), str(final))
+
+            # ---------------------------------------------------------------
+            print("\nSeveral printers")
+            with open(os.path.join(workdir, "settings.json"), "w") as fh:
+                json.dump({"host": host, "port": port, "serial": "SN123",
+                           "check_code": "CODE9", "poll_seconds": 3}, fh)
+            plugin._SETTINGS_CACHE = None
+
+            legacy = plugin.printer_list()
+            check("an older single-printer file is read as one printer",
+                  len(legacy) == 1 and legacy[0]["id"] == plugin.LEGACY_PRINTER_ID
+                  and legacy[0]["host"] == host, str(legacy))
+
+            ok, error = plugin.save_printer({"name": "Studio", "host": "10.0.0.50",
+                                             "port": 8898, "serial": "SN9",
+                                             "check_code": "C9",
+                                             "poll_seconds": 5})
+            added = plugin.printer_list()
+            check("a second printer can be added without losing the first",
+                  ok and len(added) == 2
+                  and [p["name"] for p in added] == ["127.0.0.1", "Studio"],
+                  f"{ok} {error} {[p['name'] for p in added]}")
+            check("and becomes the selected one",
+                  plugin.active_printer()["name"] == "Studio",
+                  str(plugin.active_printer()))
+            check("whose address is mirrored onto the old top-level keys",
+                  plugin.load_settings()["host"] == "10.0.0.50",
+                  str(plugin.load_settings()))
+
+            first_id = added[0]["id"]
+            ok, error = plugin.save_printer({"id": first_id, "name": "Upstairs",
+                                             "host": host, "port": port,
+                                             "serial": "SN123",
+                                             "check_code": "CODE9",
+                                             "poll_seconds": 4})
+            renamed = plugin.printer_list()
+            check("saving with an id updates rather than duplicates",
+                  ok and len(renamed) == 2
+                  and [p["name"] for p in renamed] == ["Upstairs", "Studio"],
+                  f"{ok} {error} {[p['name'] for p in renamed]}")
+
+            ok, error = plugin.remove_printer(first_id)
+            left = plugin.printer_list()
+            check("removing one leaves the other selected",
+                  ok and len(left) == 1 and left[0]["name"] == "Studio"
+                  and plugin.active_printer()["name"] == "Studio",
+                  f"{ok} {error} {[p['name'] for p in left]}")
+
+            # Switching selects a printer and the tab follows it.
+            cfg_before = plugin.load_settings().get("active")
+            inbox3 = []
+            page.post_message = inbox3.append
+            page.on_message({"type": "switch", "id": left[0]["id"]})
+            check("switching repaints the picker with the list",
+                  any(m.get("type") == "cfg" and m.get("printers")
+                      for m in inbox3),
+                  str([m.get("type") for m in inbox3]))
+            check("and records the new selection",
+                  plugin.load_settings().get("active") == left[0]["id"],
+                  f"{cfg_before} -> {plugin.load_settings().get('active')}")
+
+            # The fleet reports every configured printer in one call.
+            with MockServer(serial="S2", check_code="C2") as second:
+                second_host, second_port = "127.0.0.1", second.port
+                second.printer.set(status="printing", printProgress=0.5,
+                                   printFileName="b.3mf")
+                ok, error = plugin.save_printer({"name": "Second", "host": second_host,
+                                                 "port": second_port, "serial": "S2",
+                                                 "check_code": "C2"})
+                self_entry = plugin.active_printer()
+                page.post_message = lambda m: None
+                rows_box = []
+                page.post_message = rows_box.append
+                page.on_message({"type": "fleet"})
+                fleet_msg = [m for m in rows_box if m.get("type") == "fleet"][-1]
+                names = sorted(r["name"] for r in fleet_msg["rows"])
+                check("the fleet lists every configured printer",
+                      len(names) == 2 and names == ["Second", "Studio"],
+                      str(names))
+                check("one row is marked current",
+                      sum(1 for r in fleet_msg["rows"] if r["current"]) == 1,
+                      str(fleet_msg["rows"]))
+                printing_row = [r for r in fleet_msg["rows"]
+                                if r["name"] == "Second"][0]
+                check("a running printer reports progress and its file",
+                      printing_row["percent"] == 50.0
+                      and printing_row["file"] == "b.3mf",
+                      str(printing_row))
+                idle_row = [r for r in fleet_msg["rows"] if r["name"] != "Second"][0]
+                check("an unreachable printer is flagged for attention",
+                      idle_row["error"] and idle_row["attention"], str(idle_row))
+
+            # History stays per printer.
+            hist.entry = {"id": "x"}
+            hist.track_job(plugin.normalize_detail({"status": "printing",
+                                                   "printFileName": "x.3mf"}),
+                            now=t0 + 400)
+            tagged = hist.track_job(ready, now=t0 + 460)
+            check("each record carries the printer that produced it",
+                  tagged and tagged["printer"] == "x", str(tagged))
+            hist.entry = {"id": "y"}
+            hist.track_job(plugin.normalize_detail({"status": "printing",
+                                                   "printFileName": "y.3mf"}),
+                            now=t0 + 500)
+            hist.track_job(ready, now=t0 + 560)
+            only_x = [j["name"] for j in load_scoped(plugin)]
+            # Untagged records predate multi-printer and belong to whoever asks;
+            # another printer's tagged ones must not leak in.
+            check("and the history is scoped to that printer",
+                  "x.3mf" in only_x and "y.3mf" not in only_x,
+                  str(only_x))
 
             notifications = []
 

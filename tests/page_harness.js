@@ -168,6 +168,93 @@ must("each control button is wired", () => {
 must("the page asks for the print history on load", () => {
   assert(sent.some(m => m.type === "history"), "no history request posted");
 });
+must("and for the fleet, so the list is not empty on arrival", () => {
+  assert(sent.some(m => m.type === "fleet"), "no fleet request posted");
+});
+must("the picker lists every configured printer", () => {
+  deliver({ type: "state", last_slice: null, status: STATES.idle,
+            printers: [{ id: "p1", name: "Upstairs", host: "10.0.0.1" },
+                       { id: "p2", name: "Studio", host: "10.0.0.2" }],
+            activePrinter: "p1" });
+  assert(byId["printer"].innerHTML.indexOf("Upstairs") >= 0 &&
+         byId["printer"].innerHTML.indexOf("Studio") >= 0,
+         "picker not filled: " + byId["printer"].innerHTML);
+  assert(byId["bremove"].disabled === false, "remove enabled for the last printer");
+});
+must("removing is refused while only one printer is configured", () => {
+  deliver({ type: "state", last_slice: null, status: STATES.idle,
+            printers: [{ id: "p1", name: "Only", host: "10.0.0.1" }],
+            activePrinter: "p1" });
+  assert(byId["bremove"].disabled === true, "remove stayed enabled");
+});
+must("choosing another printer asks to switch", () => {
+  sent.length = 0;
+  byId["printer"].value = "p2";
+  byId["printer"].dispatch("change");
+  assert(sent.some(m => m.type === "switch" && m.id === "p2"),
+         "no switch posted: " + JSON.stringify(sent));
+});
+must("add printer clears the form instead of storing a blank row", () => {
+  sent.length = 0;
+  byId["badd"].dispatch("click");
+  assert(sent.some(m => m.type === "new_printer"), "no new_printer posted");
+});
+must("the fleet renders a row per printer and marks the selected one", () => {
+  byId["attention"].checked = false;
+  deliver({ type: "fleet", rows: [
+    { id: "p1", name: "Upstairs", current: true, status: "ready",
+      file: "", percent: 0, error: false, attention: false },
+    { id: "p2", name: "Studio", current: false, status: "printing",
+      file: "b.3mf", percent: 50, error: false, attention: false }] });
+  const html = byId["fleet"].innerHTML;
+  assert(html.indexOf("Upstairs") >= 0 && html.indexOf("Studio") >= 0,
+         "rows missing: " + html);
+  assert(html.indexOf("current") >= 0, "current row not marked");
+  assert(html.indexOf("b.3mf") >= 0 && html.indexOf("50%") >= 0,
+         "job details missing: " + html);
+});
+must("an open button switches to that printer", () => {
+  sent.length = 0;
+  byId["fleet"]._clicks = [];
+  byId["fleet"].querySelectorAll = function (sel) {
+    if (sel !== "button[data-open]") { return []; }
+    const out = [];
+    const re = /data-open="([^"]*)"/g;
+    let m;
+    while ((m = re.exec(this.innerHTML)) !== null) {
+      const id = m[1];            // captured: the loop reuses m
+      out.push({ getAttribute: () => id,
+                 addEventListener: (t, fn) => {
+                   this._clicks.push({ id: id, fn: fn }); } });
+    }
+    return out;
+  };
+  deliver({ type: "fleet", rows: [
+    { id: "p1", name: "A", current: false, status: "ready", file: "",
+      percent: 0, error: false, attention: false },
+    { id: "p2", name: "B", current: true, status: "ready", file: "",
+      percent: 0, error: false, attention: false }] });
+  const click = byId["fleet"]._clicks.find(c => c.id === "p1");
+  assert(click, "no open handler wired");
+  click.fn();
+  assert(sent.some(m => m.type === "switch" && m.id === "p1"),
+         "open did not post a switch: " + JSON.stringify(sent));
+});
+must("the attention filter hides printers that are fine", () => {
+  deliver({ type: "fleet", rows: [
+    { id: "p1", name: "Fine", current: false, status: "ready", file: "",
+      percent: 0, error: false, attention: false },
+    { id: "p2", name: "Broken", current: false, status: "offline", file: "",
+      percent: 0, error: true, attention: true }] });
+  byId["attention"].checked = true;
+  byId["attention"].dispatch("change");
+  const html = byId["fleet"].innerHTML;
+  assert(html.indexOf("Broken") >= 0 && html.indexOf("Fine") < 0,
+         "filter did not apply: " + html);
+  byId["attention"].checked = false;
+  byId["attention"].dispatch("change");
+  assert(byId["fleet"].innerHTML.indexOf("Fine") >= 0, "filter did not clear");
+});
 must("a maintenance button asks for exactly its own command", () => {
   sent.length = 0;
   byId["blevel"].dispatch("click");

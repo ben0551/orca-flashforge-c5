@@ -119,6 +119,12 @@ def main():
             ("the maintenance card exists and says there is nothing to jog",
              'id="blevel"' in page and 'id="bshaper"' in page
              and 'id="btimer"' in page and "nothing to jog" in page),
+            ("the printer picker and the fleet controls exist",
+             'id="printer"' in page and 'id="badd"' in page
+             and 'id="bremove"' in page and 'id="bfleet"' in page
+             and 'id="attention"' in page and 'id="fleet"' in page),
+            ("the fleet starts hidden until it is opened",
+             'id="fleet" class="hidden"' in page),
             ("the temperature chart and the history card exist",
              'id="chart"' in page and 'id="hist"' in page
              and 'id="hjobs"' in page and 'id="hrate"' in page),

@@ -26,7 +26,10 @@ SPOOLS = [
 
 
 class MockPrinter:
-    def __init__(self):
+    def __init__(self, serial="SN123", check_code="CODE9"):
+        # Per-printer credentials, so a second machine can answer on its own.
+        self.serial = serial
+        self.check_code = check_code
         self.lock = threading.Lock()
         self.state = {
             "status": "ready",
@@ -163,7 +166,8 @@ def make_handler(printer):
             if path == "/detail":
                 printer.auth_probe.append(
                     (body.get("serialNumber"), body.get("checkCode")))
-                if body.get("serialNumber") != "SN123" or body.get("checkCode") != "CODE9":
+                if (body.get("serialNumber") != printer.serial
+                        or body.get("checkCode") != printer.check_code):
                     self._json({"code": 1, "message": "SN is different"})
                     return
                 self._json({"code": 0, "message": "Success",
@@ -248,8 +252,8 @@ def make_handler(printer):
 
 
 class MockServer:
-    def __init__(self):
-        self.printer = MockPrinter()
+    def __init__(self, serial="SN123", check_code="CODE9"):
+        self.printer = MockPrinter(serial=serial, check_code=check_code)
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(self.printer))
         self.port = self.httpd.server_address[1]
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
